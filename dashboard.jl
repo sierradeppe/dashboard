@@ -125,16 +125,15 @@ function process_hetdex_files()
     return results
 end
 
-# ╔═╡ 1f89d5e1-e758-44a8-939f-0bd4ccac73d8
+# ╔═╡ 08c58fe0-05cb-4261-b439-125e23bef928
 dfs = process_hetdex_files()
 
-# ╔═╡ 73d26359-fa03-4506-a26e-5073d880de2e
+# ╔═╡ 9132ef71-c13b-4e3a-929f-86dc494758fa
 for (file_name, df) in dfs
     println("\n==== Summary for $file_name ====")
     println("Dimensions: $(size(df))")
     println("Column names: $(names(df))")
 end
-
 
 # ╔═╡ cca7ee05-4a66-4325-a012-104a5f1316b7
 md"""
@@ -1889,8 +1888,8 @@ version = "1.4.1+2"
 # ╠═43c849a0-af2b-4392-a32f-b9abb4fd1cda
 # ╠═f0f3691a-0f8a-4df5-884a-406693a4f852
 # ╠═01bde1a6-0424-4214-b1b0-0fc5f535e628
-# ╠═1f89d5e1-e758-44a8-939f-0bd4ccac73d8
-# ╠═73d26359-fa03-4506-a26e-5073d880de2e
+# ╠═08c58fe0-05cb-4261-b439-125e23bef928
+# ╠═9132ef71-c13b-4e3a-929f-86dc494758fa
 # ╟─cca7ee05-4a66-4325-a012-104a5f1316b7
 # ╟─675cf5ef-d30d-4294-a169-252c1d3e60af
 # ╟─58302c26-34ae-4bb1-8ed8-7ae0eaf87691
