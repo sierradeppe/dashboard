@@ -4,16 +4,26 @@
 using Markdown
 using InteractiveUtils
 
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    #! format: off
+    quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
+        el
+    end
+    #! format: on
+end
+
 # ╔═╡ f7c78de3-35d8-47e0-9645-f3292c064b01
-using Downloads, CSV, DataFrames, HTTP, PyCall
+using Downloads, CSV, DataFrames, HTTP, PyCall, Plots
 
 # ╔═╡ 2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # hideall
 begin
 	using Random                      # For generating synthetic data
 	using MLUtils                     # For splitting training and test data
-	using Plots        
-	using Plots.PlotMeasures             # For setting plot margins
 	using ColorSchemes, LaTeXStrings # For sprucing up figures
 	using PlutoUI, PlutoLinks      # For interactive elemnents and @ingredients
 	
@@ -128,68 +138,62 @@ end
 # ╔═╡ 08c58fe0-05cb-4261-b439-125e23bef928
 dfs = process_hetdex_files()
 
-# ╔═╡ 9132ef71-c13b-4e3a-929f-86dc494758fa
-for (file_name, df) in dfs
-    println("\n==== Summary for $file_name ====")
-    println("Dimensions: $(size(df))")
-    println("Column names: $(names(df))")
+# ╔═╡ b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
+df = dfs["hetdex_sc1_detinfo_v3.2.ecsv"]
+
+# ╔═╡ 4ffdd47c-2f29-4807-a0d6-816f547e9f36
+md"""
+Lyman Alpha Emitters: $(@bind show_lae CheckBox(;default=true))
+
+Low Redshift Galaxies: $(@bind show_lzg CheckBox(;default=true))
+
+Active Galactic Nuclei: $(@bind show_agn CheckBox(;default=true))
+"""
+
+# ╔═╡ dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
+begin
+	# Start with no rows selected
+	filter_mask = falses(nrow(df))
+	    
+	# Add rows for each selected source type
+    if @isdefined(show_lae) && show_lae
+        filter_mask .|= (df.source_type .== "lae")
+    end
+	    
+    if @isdefined(show_agn) && show_agn
+        filter_mask .|= (df.source_type .== "agn")
+    end
+	    
+    if @isdefined(show_lzg) && show_lzg
+        filter_mask .|= (df.source_type .== "lzg")
+    end
+	    
+    # Create filtered DataFrame
+    filtered_df = df[filter_mask, :]
+	        	    
+	# Return the filtered dataframe for use in later cells
+	filtered_df
 end
 
-# ╔═╡ cca7ee05-4a66-4325-a012-104a5f1316b7
-md"""
-## Simple model
-"""
+# ╔═╡ cc1605fc-210b-4d15-b3a9-9115716a647b
+source_types = unique(filtered_df.source_type)
 
-# ╔═╡ 675cf5ef-d30d-4294-a169-252c1d3e60af
-md"""
-### Fit
-"""
-
-# ╔═╡ 58302c26-34ae-4bb1-8ed8-7ae0eaf87691
-md"""
-### Assess
-"""
-
-# ╔═╡ f1ff96a0-1c05-4549-9520-aef471262465
-md"""
-## More complex model
-"""
-
-# ╔═╡ 41c4a54e-e747-49c0-8728-2f5fea74691c
-md"""
-### Fit
-"""
-
-# ╔═╡ b4064da2-becf-488c-ac57-772f8f7200a6
-md"""
-### Assess
-"""
+# ╔═╡ 156347d1-4d07-4745-90c8-1287d2179a79
+begin
+	plt = plot()
+	for source_type in source_types
+        type_data = filter(row -> row.source_type == source_type, filtered_df)
+		scatter!(plt,type_data.z_hetdex,type_data.flux, label="$(source_type)", xlabel="Z", ylabel="Flux (erg/cm^2/s)")
+	end
+	
+	display(plt)
+	plt
+end
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
 # Setup
 """
-
-# ╔═╡ c3c1ac12-4e30-463a-b5f0-aa30f83818ca
-md"""
-## Functions Used
-"""
-
-# ╔═╡ d60c4dff-4d68-4fa0-9394-c29d789271e3
-# hideall 
-dev_mode = true
-
-# ╔═╡ 5e6e5e3f-4876-418b-a989-8ec36a22d5e8
-#hideall 
-begin
-	if dev_mode  # Helpful while developing
-		M = @ingredients("src/Dashboard.jl")
-    	using .M.Dashboard
-	else  # Once functions in files are finalized
-		include("src/Dashboard.jl")
-		using .Dashboard
-	end
-end
 
 # ╔═╡ 5a2c5198-a340-4b78-8fc2-3a07a16546ec
 # hideall 
@@ -1889,18 +1893,13 @@ version = "1.4.1+2"
 # ╠═f0f3691a-0f8a-4df5-884a-406693a4f852
 # ╠═01bde1a6-0424-4214-b1b0-0fc5f535e628
 # ╠═08c58fe0-05cb-4261-b439-125e23bef928
-# ╠═9132ef71-c13b-4e3a-929f-86dc494758fa
-# ╟─cca7ee05-4a66-4325-a012-104a5f1316b7
-# ╟─675cf5ef-d30d-4294-a169-252c1d3e60af
-# ╟─58302c26-34ae-4bb1-8ed8-7ae0eaf87691
-# ╟─f1ff96a0-1c05-4549-9520-aef471262465
-# ╟─41c4a54e-e747-49c0-8728-2f5fea74691c
-# ╟─b4064da2-becf-488c-ac57-772f8f7200a6
-# ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
+# ╠═b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
+# ╟─4ffdd47c-2f29-4807-a0d6-816f547e9f36
+# ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
+# ╠═cc1605fc-210b-4d15-b3a9-9115716a647b
+# ╠═156347d1-4d07-4745-90c8-1287d2179a79
+# ╠═a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
-# ╟─c3c1ac12-4e30-463a-b5f0-aa30f83818ca
-# ╠═d60c4dff-4d68-4fa0-9394-c29d789271e3
-# ╠═5e6e5e3f-4876-418b-a989-8ec36a22d5e8
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
