@@ -17,7 +17,7 @@ macro bind(def, element)
 end
 
 # ╔═╡ f7c78de3-35d8-47e0-9645-f3292c064b01
-using Downloads, CSV, DataFrames, HTTP, PyCall, Plots
+using Statistics, Downloads, CSV, DataFrames, HTTP, PyCall, Plots
 
 # ╔═╡ 2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # hideall
@@ -190,6 +190,99 @@ begin
 	plt
 end
 
+# ╔═╡ d271ddc4-4b40-4deb-8998-d45af3a026ed
+"""
+Filter extreme flux values based on source type with more lenient thresholds
+"""
+function filter_extreme_values(df)
+    # Create a copy of the dataframe to work with
+    filtered = copy(df)
+    
+    # Group by source type
+    grouped = groupby(filtered, :source_type)
+    
+    # Initialize an empty dataframe for the filtered results
+    result = DataFrame()
+    
+    for group in grouped
+        source_type = group.source_type[1]
+        println("Processing source type: $source_type")
+        
+        # Calculate robust statistics using median instead of mean
+        flux_median = median(group.flux)
+        
+        # Use median absolute deviation (MAD) instead of standard deviation
+        # MAD is more robust to outliers
+        flux_mad = 1.4826 * median(abs.(group.flux .- flux_median))
+        
+        # If MAD is too small, use a percentile-based approach
+        if flux_mad < 1e-10
+            println("  MAD is too small, using percentile approach")
+            p01 = percentile(group.flux, 1)
+            p99 = percentile(group.flux, 99)
+            
+            normal_values = filter(row -> 
+                row.flux >= p01 && row.flux <= p99, 
+                group)
+        else
+            # Set much higher thresholds to keep more data
+            if source_type == "lae"  # Lyman Alpha Emitters - case insensitive
+                threshold = 20.0  # 20 MADs
+            elseif source_type == "agn" || source_type == "qso"  # Active Galactic Nuclei or Quasars
+                threshold = 25.0  # 25 MADs
+            else
+                threshold = 15.0  # Default to 15 MADs for other types
+            end
+            
+            # Filter out only the most extreme values
+            normal_values = filter(row -> 
+                abs(row.flux - flux_median) <= threshold * flux_mad, 
+                group)
+        end
+        
+        # Report how many were removed
+        removed = nrow(group) - nrow(normal_values)
+        println("  Removed $removed extreme values ($(round(removed/nrow(group)*100, digits=2))%)")
+        
+        # Append to result
+        append!(result, normal_values)
+    end
+    
+    println("Overall: kept $(nrow(result)) out of $(nrow(df)) observations ($(round(nrow(result)/nrow(df)*100, digits=2))%)")
+    return result
+end
+
+# ╔═╡ 7c06e963-ab65-4433-bec2-4db50f1d36e5
+# Filter extreme values
+filtered_clean_df = filter_extreme_values(filtered_df)
+
+
+# ╔═╡ add33bb0-0cf4-4917-b262-3d0c2ecc5d3c
+# Plot the filtered data
+begin
+    plt_filtered = plot(title="Filtered Data by Source Type", 
+                        xlabel="Redshift (z)", 
+                        ylabel="Flux (erg/cm²/s)",
+                        legend=:outertopright)
+    
+    # Use a more distinct color palette
+    colors = [:blue, :red, :green, :purple, :orange, :cyan, :magenta, :gold]
+    
+    for (i, source_type) in enumerate(source_types)
+        type_data = filter(row -> row.source_type == source_type, filtered_clean_df)
+        color_idx = mod(i-1, length(colors)) + 1
+        
+        scatter!(plt_filtered, type_data.z_hetdex, type_data.flux, 
+                label="$(source_type) (n=$(nrow(type_data)))", 
+                markersize=3,
+                color=colors[color_idx],
+                alpha=0.7)
+    end
+    
+    display(plt_filtered)
+    plt_filtered
+end
+
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
 # Setup
@@ -214,6 +307,7 @@ PlutoLinks = "0ff47ea0-7a50-410d-8455-4348d5de0420"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [compat]
 CSV = "~0.10.15"
@@ -226,6 +320,7 @@ Plots = "~1.40.9"
 PlutoLinks = "~0.1.6"
 PlutoUI = "~0.7.23"
 PyCall = "~1.96.4"
+Statistics = "~1.11.1"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -234,7 +329,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.2"
 manifest_format = "2.0"
-project_hash = "9ee7662284a18cd981973e562ad4a60f6ac19e3a"
+project_hash = "1040621f8c6cb052b8238221b6bb855c018b90dd"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
@@ -1898,6 +1993,9 @@ version = "1.4.1+2"
 # ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
 # ╠═cc1605fc-210b-4d15-b3a9-9115716a647b
 # ╠═156347d1-4d07-4745-90c8-1287d2179a79
+# ╠═d271ddc4-4b40-4deb-8998-d45af3a026ed
+# ╠═7c06e963-ab65-4433-bec2-4db50f1d36e5
+# ╠═add33bb0-0cf4-4917-b262-3d0c2ecc5d3c
 # ╠═a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
