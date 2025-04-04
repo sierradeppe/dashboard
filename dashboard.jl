@@ -180,108 +180,60 @@ source_types = unique(filtered_df.source_type)
 
 # ╔═╡ 156347d1-4d07-4745-90c8-1287d2179a79
 begin
-	plt = plot()
+	plt1 = plot()
 	for source_type in source_types
         type_data = filter(row -> row.source_type == source_type, filtered_df)
-		scatter!(plt,type_data.z_hetdex,type_data.flux, label="$(source_type)", xlabel="Z", ylabel="Flux (erg/cm^2/s)")
+		scatter!(plt1,type_data.z_hetdex,type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Comntinuum (erg/cm^2/s)")
+	end
+	
+	display(plt1)
+	plt1
+end
+
+# ╔═╡ 7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
+#only positive values
+filtered_df_new = filter(row -> row.continuum ≥ 0, filtered_df)
+
+# ╔═╡ 97605a73-dafd-4740-ae33-999dfa7fd7bd
+begin
+	function filter_extreme_continuum(df)
+	    cont_median = median(df.continuum)
+	    cont_mad = 1.4826 * median(abs.(df.continuum .- cont_median))
+		println(cont_mad)
+	
+	    # If MAD is too small, use percentile-based approach
+	    if cont_mad < 1e-5
+	        println("MAD is too small, switching to percentile approach")
+	        p01 = percentile(df.continuum, 1)
+	        p5 = percentile(df.continuum, 5)
+	        df = filter(row -> p01 ≤ row.continuum , df)
+			#df = filter(row -> p05 >= row.continuum , df)
+	    else
+			println("Running lenient filtering")
+	        threshold = 7  # More lenient filtering, keeping more data
+	        df = filter(row -> abs(row.continuum - cont_median) ≤ threshold * cont_mad, df)
+	    end
+	
+	    return df
+	end
+	
+	filtered_df_new_v2 = filter_extreme_continuum(filtered_df_new)
+end
+
+# ╔═╡ 1bb82599-45c3-4cf1-a80f-054933cc2515
+begin
+	plt = plot()
+	for source_type in source_types
+	    type_data = filter(row -> row.source_type == source_type, filtered_df_new_v2)
+	    scatter!(plt, type_data.z_hetdex, type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Continuum (erg/cm²/s)")
 	end
 	
 	display(plt)
 	plt
 end
 
-# ╔═╡ d271ddc4-4b40-4deb-8998-d45af3a026ed
-"""
-Filter extreme flux values based on source type with more lenient thresholds
-"""
-function filter_extreme_values(df)
-    # Create a copy of the dataframe to work with
-    filtered = copy(df)
-    
-    # Group by source type
-    grouped = groupby(filtered, :source_type)
-    
-    # Initialize an empty dataframe for the filtered results
-    result = DataFrame()
-    
-    for group in grouped
-        source_type = group.source_type[1]
-        println("Processing source type: $source_type")
-        
-        # Calculate robust statistics using median instead of mean
-        flux_median = median(group.flux)
-        
-        # Use median absolute deviation (MAD) instead of standard deviation
-        # MAD is more robust to outliers
-        flux_mad = 1.4826 * median(abs.(group.flux .- flux_median))
-        
-        # If MAD is too small, use a percentile-based approach
-        if flux_mad < 1e-10
-            println("  MAD is too small, using percentile approach")
-            p01 = percentile(group.flux, 1)
-            p99 = percentile(group.flux, 99)
-            
-            normal_values = filter(row -> 
-                row.flux >= p01 && row.flux <= p99, 
-                group)
-        else
-            # Set much higher thresholds to keep more data
-            if source_type == "lae"  # Lyman Alpha Emitters - case insensitive
-                threshold = 20.0  # 20 MADs
-            elseif source_type == "agn" || source_type == "qso"  # Active Galactic Nuclei or Quasars
-                threshold = 25.0  # 25 MADs
-            else
-                threshold = 15.0  # Default to 15 MADs for other types
-            end
-            
-            # Filter out only the most extreme values
-            normal_values = filter(row -> 
-                abs(row.flux - flux_median) <= threshold * flux_mad, 
-                group)
-        end
-        
-        # Report how many were removed
-        removed = nrow(group) - nrow(normal_values)
-        println("  Removed $removed extreme values ($(round(removed/nrow(group)*100, digits=2))%)")
-        
-        # Append to result
-        append!(result, normal_values)
-    end
-    
-    println("Overall: kept $(nrow(result)) out of $(nrow(df)) observations ($(round(nrow(result)/nrow(df)*100, digits=2))%)")
-    return result
-end
-
-# ╔═╡ 7c06e963-ab65-4433-bec2-4db50f1d36e5
-# Filter extreme values
-filtered_clean_df = filter_extreme_values(filtered_df)
-
-
-# ╔═╡ add33bb0-0cf4-4917-b262-3d0c2ecc5d3c
-# Plot the filtered data
-begin
-    plt_filtered = plot(title="Filtered Data by Source Type", 
-                        xlabel="Redshift (z)", 
-                        ylabel="Flux (erg/cm²/s)",
-                        legend=:outertopright)
-    
-    # Use a more distinct color palette
-    colors = [:blue, :red, :green, :purple, :orange, :cyan, :magenta, :gold]
-    
-    for (i, source_type) in enumerate(source_types)
-        type_data = filter(row -> row.source_type == source_type, filtered_clean_df)
-        color_idx = mod(i-1, length(colors)) + 1
-        
-        scatter!(plt_filtered, type_data.z_hetdex, type_data.flux, 
-                label="$(source_type) (n=$(nrow(type_data)))", 
-                markersize=3,
-                color=colors[color_idx],
-                alpha=0.7)
-    end
-    
-    display(plt_filtered)
-    plt_filtered
-end
+# ╔═╡ 60a700c3-354f-4948-be92-2eda822618b4
+println("Filtered dataset size: ", size(filtered_df_new_v2))
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
@@ -1993,9 +1945,10 @@ version = "1.4.1+2"
 # ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
 # ╠═cc1605fc-210b-4d15-b3a9-9115716a647b
 # ╠═156347d1-4d07-4745-90c8-1287d2179a79
-# ╠═d271ddc4-4b40-4deb-8998-d45af3a026ed
-# ╠═7c06e963-ab65-4433-bec2-4db50f1d36e5
-# ╠═add33bb0-0cf4-4917-b262-3d0c2ecc5d3c
+# ╠═7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
+# ╠═97605a73-dafd-4740-ae33-999dfa7fd7bd
+# ╠═1bb82599-45c3-4cf1-a80f-054933cc2515
+# ╠═60a700c3-354f-4948-be92-2eda822618b4
 # ╠═a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
