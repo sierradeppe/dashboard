@@ -19,15 +19,17 @@ end
 # ╔═╡ 2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # hideall
 begin
-	using Random                      # For generating synthetic data
-	using MLUtils                     # For splitting training and test data
-	using ColorSchemes, LaTeXStrings # For sprucing up figures
-	using PlutoUI, PlutoLinks      # For interactive elements and @ingredients
-	using Statistics, Downloads, CSV, DataFrames, HTTP, PyCall, Plots, Flux, DataFrames, Turing, StatsBase 
+	using Random                      
+	using MLUtils                     
+	using ColorSchemes, LaTeXStrings , Distributions
+	using PlutoUI, PlutoLinks    
+	using Statistics, Downloads, CSV, DataFrames, HTTP, PyCall 
+	using Plots, Plots.PlotMeasures, Flux, DataFrames, Turing, StatsBase 
 	using MCMCChains: Chains
 	using StatsPlots
 	using MLBase
 	using GLM
+	using KernelDensity
 	
 	Random.seed!(42)                     
 end;
@@ -85,21 +87,6 @@ md"""
 Below, continuum values below zero are removed to create our baseline dataframe. The first option for filtering is introduced in which any data farther than 3σ is removed. This is a very common technique in astronomy. 
 """
 
-# ╔═╡ 8686dc59-679b-42ee-b6dd-0f94c61740fd
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-	plt3 = plot()
-	for source_type in source_types
-	    type_data = filter(row -> row.source_type == source_type, filtered_df_new_std)
-	    scatter!(plt3, type_data.z_hetdex, type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Continuum (erg/cm²/s)")
-	end
-	
-	display(plt3)
-	plt3
-end
-  ╠═╡ =#
-
 # ╔═╡ 318e021b-09d0-4c61-bb70-63f3267d89e3
 md"""
 \
@@ -120,6 +107,18 @@ md"""
 
 # ╔═╡ b2af9b62-0ef5-452b-9907-acf402514906
 fm_all = @formula(source_type ~ 1+ z_hetdex + gmag + Av + flux + continuum)
+
+# ╔═╡ bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
+md"Slide to adjust x domain: $(@bind x_max1 Slider(0:10:2000; default=1000, show_value=true))"
+
+# ╔═╡ 05de7c5b-cd38-4cf7-8530-34c22d63ca79
+md"Slide to adjust y range: $(@bind y_max1 Slider(0.1:0.1:30; default=1000, show_value=true))"
+
+# ╔═╡ d8669fd4-ec53-456f-9be9-f3198a914185
+md"Slide to adjust x domain: $(@bind x_max2 Slider(0:10:2000; default=200, show_value=true))"
+
+# ╔═╡ 9f1d4678-d25e-4b07-81d3-7db7049a83c2
+md"Slide to adjust y range: $(@bind y_max2 Slider(0.1:0.1:30; default=10, show_value=true))"
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
@@ -292,6 +291,21 @@ begin
 	
 end
 
+# ╔═╡ 8686dc59-679b-42ee-b6dd-0f94c61740fd
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+	plt3 = plot()
+	for source_type in source_types
+	    type_data = filter(row -> row.source_type == source_type, filtered_df_new_std)
+	    scatter!(plt3, type_data.z_hetdex, type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Continuum (erg/cm²/s)")
+	end
+	
+	display(plt3)
+	plt3
+end
+  ╠═╡ =#
+
 # ╔═╡ c03dadf8-011e-4b69-96fe-83330bf1f20a
 println("Filtered dataset size: ", size(filtered_df_new_std))
 
@@ -340,7 +354,9 @@ end
 size(filtered_df_new_per)
 
 # ╔═╡ 2cd1500d-c91d-4a6c-9390-9f3723b637f7
-# changes source type to integers for logreg classification model
+"""
+Changes source type to integers for logreg classification model
+"""
 function encode_source_type(df::DataFrame, source::String)
     og = ["lae", "lzg", "agn"]
 	src = String[]
@@ -373,6 +389,9 @@ begin
 end
 
 # ╔═╡ 12e37b21-5bf0-4feb-86b0-81b4734e09a8
+"""
+Calculate the binary prediction weights for each object
+"""
 function predict_source_type(row, fit_lae, fit_lzg, fit_agn)
     # Get probability predictions from each binary classifier
     prob_lae = predict(fit_lae, row)[1]
@@ -388,6 +407,9 @@ function predict_source_type(row, fit_lae, fit_lzg, fit_agn)
 end
 
 # ╔═╡ 64eaa0b1-362a-431b-91a8-c037124c9e9b
+"""
+Assign classification to each object based on binary prediction weights
+"""
 function predict_all_sources(df, fit_lae, fit_lzg, fit_agn)
     predictions = String[]
     
@@ -447,111 +469,206 @@ begin
 	conf_matrix_df
 end
 
-# ╔═╡ 3194ab3c-2a01-4e6f-9b85-4552e8fd1926
-# Create confusion matrix heatmap with proper labels
-function plot_confusion_matrix(results)
-    conf_matrix = results["confusion_matrix"]
-    classes = results["classes"]
-    actual_labels = ["actual_" .* class for class in classes]
-    predicted_labels = ["predicted_" .* class for class in classes]
+# ╔═╡ 1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
+function plot_scatter(df, predictions, feature_x, feature_y, axes)
+    # Set up plot area
+    plt = plot(layout=(1, 2), size=(1000, 450))
     
-    # Calculate percentages for each actual class
-    conf_pct = similar(conf_matrix, Float64)
-    for i in 1:size(conf_matrix, 1)
-        total = sum(conf_matrix[i, :])
-        conf_pct[i, :] = total > 0 ? conf_matrix[i, :] ./ total : zeros(size(conf_matrix, 2))
+    if !isempty(axes)
+        x_min = axes[1]
+        x_max = axes[2]
+        y_min = axes[3]
+        y_max = axes[4]
+    else
+        x_min, x_max = minimum(df[!, feature_x]) - 0.1, maximum(df[!, feature_x]) + 		0.1
+        y_min, y_max = minimum(df[!, feature_y]) - 0.1, maximum(df[!, feature_y]) + 		0.1
     end
+	
+    # Get incorrect classifications
+    incorrect_idx = findall(predictions .!= df.source_type)
     
-    # Create heatmap
-    p = heatmap(
-        conf_pct,
-        xticks=(1:3, predicted_labels),
-        yticks=(1:3, actual_labels),
-        title="Confusion Matrix",
-        xlabel="Predicted",
-        ylabel="Actual",
-        color=:blues,
-        aspect_ratio=:equal,
-        clim=(0, 1),
-        xrotation=45  # Rotate x-axis labels for better readability
+    # Create class-specific datasets
+    classes = unique(df.source_type)
+    class_colors = [:blue, :green, :purple]
+    
+    # LEFT PLOT - Actual classes
+    for (i, class) in enumerate(classes)
+        class_idx = findall(df.source_type .== class)
+        
+        # Create a simple scatter for each class
+        scatter!(
+            plt[1],
+            df[class_idx, feature_x],
+            df[class_idx, feature_y],
+            color=class_colors[i],
+            label=class,
+            markersize=4,
+            alpha=0.6
+        )
+    end
+    title!(plt[1], "True Classes: $(String(feature_x)) vs $(String(feature_y))")
+    xlabel!(plt[1], String(feature_x))  # Convert Symbol to String
+    ylabel!(plt[1], String(feature_y))  # Convert Symbol to String
+    
+    # RIGHT PLOT - Predictions & errors
+    # First, plot all points in light gray
+    scatter!(
+        plt[2],
+        df[!, feature_x],
+        df[!, feature_y],
+        color=:lightgray,
+        markersize=4,
+        alpha=0.3,
+        label=nothing
     )
     
-    # Add text annotations with counts and percentages
-    for i in 1:3, j in 1:3
-        annotate!(j, i, text("$(conf_matrix[i,j])\n$(round(conf_pct[i,j]*100, digits=1))%", 
-            :white, 10, :center))
-    end
-    
-    return p
-end
-
-
-# ╔═╡ 60a63c02-6f40-4b2c-8257-61226086fac3
-function plot_decision_boundaries(df, predictions, feature_x, feature_y; density_threshold=1000)
-    N = nrow(df)
-    incorrect_idx = findall(predictions .!= df.source_type)
-
-    x_min, x_max = minimum(df[!, feature_x]) - 0.1, maximum(df[!, feature_x]) + 0.1
-    y_min, y_max = minimum(df[!, feature_y]) - 0.1, maximum(df[!, feature_y]) + 0.1
-
-    # Create the plot layout
-    plt = plot(layout=(1, 2), size=(1000, 450))
-
-    ## LEFT PLOT (True Classes)
-    if N < density_threshold
-        scatter!(
-            plt[1],  # Access the first subplot
-            df[!, feature_x],
-            df[!, feature_y],
-            group=df.source_type,
-            title="True Classes: $feature_x vs $feature_y",
-            xlabel=feature_x,
-            ylabel=feature_y,
-            markersize=4,
-            alpha=0.6,
-            legend=:topright
-        )
-    else
-        # Generate 2D histogram data
-        heatmap_data, xedges, yedges = histogram2d(df[!, feature_x], df[!, feature_y], nbins=(50, 50))
-        println("Contour data: ", size(heatmap_data))  # Debugging line to check data
-
-        # Create a contour plot from the histogram data
-        contour!(
-            plt[1],  # Access the first subplot
-            xedges[1:end-1], yedges[1:end-1], heatmap_data,  # Define the grid for contours
-            xlabel=feature_x,
-            ylabel=feature_y,
-            title="True Classes Contour",
-            color=:blues
-        )
-    end
-
-    ## RIGHT PLOT (Misclassified Points)
+    # Then highlight misclassifications in red
     if length(incorrect_idx) > 0
         scatter!(
-            plt[2],  # Access the second subplot
+            plt[2],
             df[incorrect_idx, feature_x],
             df[incorrect_idx, feature_y],
             color=:red,
             marker=:xcross,
             markersize=6,
-            alpha=0.7,
-            xlabel=feature_x,
-            ylabel=feature_y,
-            title="Misclassified Points",
+            alpha=0.8,
             label="Misclassified"
         )
-    else
-        println("No misclassified points to plot.")
     end
-
+    title!(plt[2], "Misclassifications: $(String(feature_x)) vs $(String(feature_y))")
+    xlabel!(plt[2], String(feature_x))  # Convert Symbol to String
+    ylabel!(plt[2], String(feature_y))  # Convert Symbol to String
+    
+    # Ensure both plots have the same axis limits
+    xlims!(plt[1], x_min, x_max)
+    ylims!(plt[1], y_min, y_max)
+    xlims!(plt[2], x_min, x_max)
+    ylims!(plt[2], y_min, y_max)
+    
     return plt
 end
 
+# ╔═╡ 72bcd4fb-b1b3-446e-be0c-10b17218ab66
+plot_scatter(filtered_df_new_per, predictions, :flux, :continuum, [0,x_max1,0,y_max1])
 
-# ╔═╡ 58bdd56e-ae18-4dcc-abbc-2542e2abc03e
-plot_decision_boundaries(filtered_df_new_per, predictions, :flux, :continuum; density_threshold=500)
+# ╔═╡ beb08440-6ca8-4232-bc88-4eb0bd796603
+function plot_heat(df, predictions, feature_x, feature_y, axes, bins=20)
+    # Set up plot area
+    plt = plot(layout=(1, 2), size=(1000, 450))
+    
+    if !isempty(axes)
+        x_min = axes[1]
+        x_max = axes[2]
+        y_min = axes[3]
+        y_max = axes[4]
+    else
+        x_min, x_max = minimum(df[!, feature_x]) - 0.1, maximum(df[!, feature_x]) + 0.1
+        y_min, y_max = minimum(df[!, feature_y]) - 0.1, maximum(df[!, feature_y]) + 0.1
+    end
+    
+    # Get incorrect classifications
+    incorrect_idx = findall(predictions .!= df.source_type)
+    
+    # Create class-specific datasets
+    classes = unique(df.source_type)
+    
+    # Define the edges for binning
+    x_edges = range(x_min, x_max, length=bins+1)
+    y_edges = range(y_min, y_max, length=bins+1)
+    
+    # Initialize density matrix for each class
+    density_matrix = zeros(bins, bins, length(classes))
+    
+    # Fill density matrix for each class
+    for (i, class) in enumerate(classes)
+        class_idx = findall(df.source_type .== class)
+        class_df = df[class_idx, :]
+        
+        # Create histogram counts
+        for j in 1:length(class_idx)
+            x_val = class_df[j, feature_x]
+            y_val = class_df[j, feature_y]
+            
+            # Skip points outside the specified range
+            if x_val < x_min || x_val > x_max || y_val < y_min || y_val > y_max
+                continue
+            end
+            
+            # Find bin indices - handle edge case for max value
+            x_bin = x_val == x_max ? bins : Int(floor((x_val - x_min) / (x_max - x_min) * bins)) + 1
+            y_bin = y_val == y_max ? bins : Int(floor((y_val - y_min) / (y_max - y_min) * bins)) + 1
+            
+            # Increment count in that bin
+            density_matrix[x_bin, y_bin, i] += 1
+        end
+    end
+    
+    # Combine classes with different colors for visualization
+    heatmap_data = zeros(bins, bins)
+    for i in 1:length(classes)
+        # Use different multipliers for different classes to create distinct colors
+        heatmap_data .+= density_matrix[:, :, i] .* i
+    end
+    
+    # Create heatmap
+    heatmap!(
+        plt[1],
+        x_edges[1:end-1],
+        y_edges[1:end-1],
+        heatmap_data',
+        color=:viridis,
+        colorbar=true
+    )
+    title!(plt[1], "Class Density: $(String(feature_x)) vs $(String(feature_y))")
+    xlabel!(plt[1], String(feature_x))
+    ylabel!(plt[1], String(feature_y))
+    
+    # RIGHT PLOT - Misclassification heatmap
+    # Initialize misclassification density matrix
+    misclass_matrix = zeros(bins, bins)
+    
+    # Count misclassifications in each bin
+    for idx in incorrect_idx
+        x_val = df[idx, feature_x]
+        y_val = df[idx, feature_y]
+        
+        # Skip points outside the specified range
+        if x_val < x_min || x_val > x_max || y_val < y_min || y_val > y_max
+            continue
+        end
+        
+        # Find bin indices - handle edge case for max value
+        x_bin = x_val == x_max ? bins : Int(floor((x_val - x_min) / (x_max - x_min) * bins)) + 1
+        y_bin = y_val == y_max ? bins : Int(floor((y_val - y_min) / (y_max - y_min) * bins)) + 1
+        
+        # Increment count in that bin
+        misclass_matrix[x_bin, y_bin] += 1
+    end
+    
+    # Create heatmap of misclassifications
+    heatmap!(
+        plt[2],
+        x_edges[1:end-1],
+        y_edges[1:end-1],
+        misclass_matrix',
+        color=:reds,
+        colorbar=true
+    )
+    title!(plt[2], "Misclassifications: $(String(feature_x)) vs $(String(feature_y))")
+    xlabel!(plt[2], String(feature_x))
+    ylabel!(plt[2], String(feature_y))
+    
+    # Ensure both plots have the same axis limits
+    xlims!(plt[1], x_min, x_max)
+    ylims!(plt[1], y_min, y_max)
+    xlims!(plt[2], x_min, x_max)
+    ylims!(plt[2], y_min, y_max)
+    
+    return plt
+end
+
+# ╔═╡ fa59defd-6da1-47ee-974c-68cee481e032
+plot_heat(filtered_df_new_per, predictions, :flux, :continuum, [0,x_max2,0,y_max2], 100)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -559,10 +676,12 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 ColorSchemes = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+KernelDensity = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
 MLBase = "f0e99cf1-93fa-52ec-9ecc-5026115318e0"
@@ -581,9 +700,11 @@ Turing = "fce5fe82-541a-59a6-adf8-730c64b5f9a0"
 CSV = "~0.10.15"
 ColorSchemes = "~3.29.0"
 DataFrames = "~1.7.0"
+Distributions = "~0.25.118"
 Flux = "~0.14.25"
 GLM = "~1.9.0"
 HTTP = "~1.10.15"
+KernelDensity = "~0.6.9"
 LaTeXStrings = "~1.4.0"
 MCMCChains = "~6.0.7"
 MLBase = "~0.9.2"
@@ -604,7 +725,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.2"
 manifest_format = "2.0"
-project_hash = "49d2dc3f463f5f3becb0ac103a892d9c4100bbce"
+project_hash = "ae2c579df0dae2d4f4a0a83fcbc0c2b32058ad61"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "e2478490447631aedba0823d4d7a80b2cc8cdb32"
@@ -3509,7 +3630,12 @@ version = "1.4.1+2"
 # ╠═b2af9b62-0ef5-452b-9907-acf402514906
 # ╠═6e060af6-2a84-4118-b6d2-fc90f213b183
 # ╠═1d61a378-6f6a-459a-a280-2ca0eea69b5f
-# ╠═58bdd56e-ae18-4dcc-abbc-2542e2abc03e
+# ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
+# ╟─bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
+# ╟─05de7c5b-cd38-4cf7-8530-34c22d63ca79
+# ╟─fa59defd-6da1-47ee-974c-68cee481e032
+# ╟─d8669fd4-ec53-456f-9be9-f3198a914185
+# ╟─9f1d4678-d25e-4b07-81d3-7db7049a83c2
 # ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
@@ -3520,7 +3646,7 @@ version = "1.4.1+2"
 # ╠═12e37b21-5bf0-4feb-86b0-81b4734e09a8
 # ╠═64eaa0b1-362a-431b-91a8-c037124c9e9b
 # ╠═39ce14f7-c495-4d75-be11-93ccef40c773
-# ╠═3194ab3c-2a01-4e6f-9b85-4552e8fd1926
-# ╠═60a63c02-6f40-4b2c-8257-61226086fac3
+# ╠═1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
+# ╠═beb08440-6ca8-4232-bc88-4eb0bd796603
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
