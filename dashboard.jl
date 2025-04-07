@@ -87,6 +87,21 @@ md"""
 Below, continuum values below zero are removed to create our baseline dataframe. The first option for filtering is introduced in which any data farther than 3σ is removed. This is a very common technique in astronomy. 
 """
 
+# ╔═╡ 8686dc59-679b-42ee-b6dd-0f94c61740fd
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+	plt3 = plot()
+	for source_type in source_types
+	    type_data = filter(row -> row.source_type == source_type, filtered_df_new_std)
+	    scatter!(plt3, type_data.z_hetdex, type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Continuum (erg/cm²/s)")
+	end
+	
+	display(plt3)
+	plt3
+end
+  ╠═╡ =#
+
 # ╔═╡ 318e021b-09d0-4c61-bb70-63f3267d89e3
 md"""
 \
@@ -97,12 +112,12 @@ The below cell uses Median Absolute Deviation (MAD) in order to decide whether t
 
 A low MAD threshold suggests that the data might be very flat and absolute deviation may not be a reliable method to remove outliers, thus we use a percentile based method to remove stragglers. Only the middle 98% of data is kept in this case.
 
-A higher MAD threshold imples the presence of more significant outliers. In this case, any data that is within 10x the threshold is kept to remove only the most extreme of outliers, and all other points are discarded. This method typically results in keeping more data.
+A higher MAD threshold implies the presence of more significant outliers. In this case, any data that is within 10x the threshold is kept to remove only the most extreme of outliers, and all other points are discarded. This method typically results in keeping more data.
 """
 
 # ╔═╡ cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 md"""
-## Bayesian Logistic Regression Model - Classification
+## Logistic Regression Model - Classification
 """
 
 # ╔═╡ b2af9b62-0ef5-452b-9907-acf402514906
@@ -291,21 +306,6 @@ begin
 	
 end
 
-# ╔═╡ 8686dc59-679b-42ee-b6dd-0f94c61740fd
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-	plt3 = plot()
-	for source_type in source_types
-	    type_data = filter(row -> row.source_type == source_type, filtered_df_new_std)
-	    scatter!(plt3, type_data.z_hetdex, type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Continuum (erg/cm²/s)")
-	end
-	
-	display(plt3)
-	plt3
-end
-  ╠═╡ =#
-
 # ╔═╡ c03dadf8-011e-4b69-96fe-83330bf1f20a
 println("Filtered dataset size: ", size(filtered_df_new_std))
 
@@ -357,8 +357,7 @@ size(filtered_df_new_per)
 """
 Changes source type to integers for logreg classification model
 """
-function encode_source_type(df::DataFrame, source::String)
-    og = ["lae", "lzg", "agn"]
+function encode_source_type(df::DataFrame, source::String,og)
 	src = String[]
 	for s in og
 		if s != source
@@ -374,18 +373,17 @@ function encode_source_type(df::DataFrame, source::String)
 end
 
 # ╔═╡ 6e060af6-2a84-4118-b6d2-fc90f213b183
-begin
-	# Classify "lae"
-	df_lae = encode_source_type(filtered_df_new_per, "lae")
-	fit_lae = glm(fm_all, df_lae, Binomial(), LogitLink())
-	
-	# Classify "lzg"
-	df_lzg = encode_source_type(filtered_df_new_per, "lzg")
-	fit_lzg = glm(fm_all, df_lzg, Binomial(), LogitLink())
-	
-	# Classify "agn"
-	df_agn = encode_source_type(filtered_df_new_per, "agn")
-	fit_agn = glm(fm_all, df_agn, Binomial(), LogitLink())
+begin    # Classify "lae"
+    df_lae = encode_source_type(filtered_df_new_per, "lae", ["lae", "lzg", "agn"])
+    fit_lae = glm(fm_all, df_lae, Binomial(), LogitLink())
+    
+    # Classify "lzg"
+    df_lzg = encode_source_type(filtered_df_new_per, "lzg", ["lae", "lzg", "agn"])
+    fit_lzg = glm(fm_all, df_lzg, Binomial(), LogitLink())
+    
+    # Classify "agn"
+    df_agn = encode_source_type(filtered_df_new_per, "agn", ["lae", "lzg", "agn"])
+    fit_agn = glm(fm_all, df_agn, Binomial(), LogitLink())
 end
 
 # ╔═╡ 12e37b21-5bf0-4feb-86b0-81b4734e09a8
