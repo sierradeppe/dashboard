@@ -16,8 +16,20 @@ macro bind(def, element)
     #! format: on
 end
 
+# ╔═╡ 2433a18f-d562-48f1-b151-ea33d1303fd7
+begin
+	using Pkg
+	Pkg.status("Flux")
+end
+
 # ╔═╡ f7c78de3-35d8-47e0-9645-f3292c064b01
 using Statistics, Downloads, CSV, DataFrames, HTTP, PyCall, Plots, Flux, DataFrames, StatsBase
+
+# ╔═╡ eef14cac-4a8d-46a3-b8f3-4fc672701d53
+begin
+	using Flux: onehotbatch, onecold, crossentropy
+	using LinearAlgebra
+end
 
 # ╔═╡ 2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # hideall
@@ -278,101 +290,270 @@ end
 # ╔═╡ 60a700c3-354f-4948-be92-2eda822618b4
 println("Filtered dataset size: ", size(filtered_df_new_per))
 
-# ╔═╡ bc40e00f-62dd-47f1-803d-9f6aff00d7ed
+# ╔═╡ a1381bc7-ecca-4617-87c6-8b0ead0940e6
+function classify_hetdex_objects(df)
+    # Step 1: Prepare the data
+    println("Preparing data...")
+    
+    # Extract features (RA, DEC, z_hetdex, continuum)
+    features = [:RA, :DEC, :z_hetdex, :continuum]
+    X = Matrix{Float64}(df[:, features])
+    
+    # Extract labels (source_type)
+    y = df.source_type
+    unique_classes = sort(unique(y))
+    class_to_idx = Dict(class => i for (i, class) in enumerate(unique_classes))
+    y_idx = [class_to_idx[class] for class in y]
+    
+    # One-hot encode the labels
+    y_onehot = onehotbatch(y_idx, 1:length(unique_classes))
+    
+    # Normalize features for better training
+    function normalize(X)
+        X_norm = similar(X)
+        for j in 1:size(X, 2)
+            μ = mean(X[:, j])
+            σ = std(X[:, j])
+            X_norm[:, j] = (X[:, j] .- μ) ./ (σ + eps())
+        end
+        return X_norm
+    end
+    
+    X_norm = normalize(X)
+    
+    # Step 2: Split data into training and testing sets (80/20)
+    n = size(X_norm, 1)
+    idx = shuffle(1:n)
+    train_idx = idx[1:Int(floor(0.8*n))]
+    test_idx = idx[Int(floor(0.8*n))+1:end]
+    
+    # Transpose for Flux (Flux expects features in rows, samples in columns)
+    X_train = Matrix{Float64}(X_norm[train_idx, :]')
+    y_train = y_onehot[:, train_idx]
+    X_test = Matrix{Float64}(X_norm[test_idx, :]')
+    y_test = y_onehot[:, test_idx]
+    
+    # Step 3: Build a simple model
+    println("Building and training model...")
+    input_size = size(X_train, 1)  # Number of features
+    output_size = length(unique_classes)  # Number of classes
+    
+    # Simple model with just one hidden layer
+    model = Chain(
+        Dense(input_size, 32, relu),  # Single hidden layer with 32 neurons
+        Dense(32, output_size),       # Output layer
+        softmax                       # Convert to probabilities
+    )
+    
+    # Define loss function - modified to take model as first parameter for latest Flux API
+    function loss_fn(m, x, y)
+        return crossentropy(m(x), y)
+    end
+    
+    # Step 4: Train the model
+    # Create batches manually instead of using DataLoader
+    function create_batches(X, y, batch_size, shuffle_data=true)
+        n = size(X, 2)  # Number of samples
+        batches = []
+        
+        # Create indices and optionally shuffle them
+        indices = collect(1:n)
+        if shuffle_data
+            indices = shuffle(indices)
+        end
+        
+        # Create batches
+        for i in 1:batch_size:n
+            end_idx = min(i + batch_size - 1, n)
+            batch_indices = indices[i:end_idx]
+            push!(batches, (X[:, batch_indices], y[:, batch_indices]))
+        end
+        
+        return batches
+    end
+    
+    # Optimizer
+    opt = ADAM(0.001)
+	opt_state = Flux.setup(opt, model)
+    
+    # For storing metrics
+    train_losses = Float64[]
+    test_losses = Float64[]
+    train_accs = Float64[]
+    test_accs = Float64[]
+    
+    # Calculate accuracy
+    function accuracy(m, x, y)
+        predictions = onecold(m(x))
+        targets = onecold(y)
+        return mean(predictions .== targets)
+    end
+    
+    # Prepare batches
+    batch_size = 64
+    
+    # Train for 20 epochs
+    epochs = 20
+    for epoch in 1:epochs
+        # Create new batches for each epoch (with shuffling)
+        train_batches = create_batches(X_train, y_train, batch_size, true)
+        
+        # Train on batches
+        for (x, y) in train_batches
+            # Use explicit gradient calculation with the latest Flux API
+            gs = gradient(m -> loss_fn(m, x, y), model)
+			Flux.update!(opt_state, model, gs)
+        end
+        
+        # Create batches for evaluation (no shuffling needed)
+        train_eval_batches = create_batches(X_train, y_train, batch_size, false)
+        test_eval_batches = create_batches(X_test, y_test, batch_size, false)
+        
+        # Calculate metrics
+        train_loss = mean([loss_fn(model, x, y) for (x, y) in train_eval_batches])
+        test_loss = mean([loss_fn(model, x, y) for (x, y) in test_eval_batches])
+        
+        train_acc = mean([accuracy(model, x, y) for (x, y) in train_eval_batches])
+        test_acc = mean([accuracy(model, x, y) for (x, y) in test_eval_batches])
+        
+        push!(train_losses, train_loss)
+        push!(test_losses, test_loss)
+        push!(train_accs, train_acc)
+        push!(test_accs, test_acc)
+        
+        # Print progress
+        if epoch % 5 == 0 || epoch == 1 || epoch == epochs
+            println("Epoch $epoch/$epochs:")
+            println("  Train Loss: $(round(train_loss, digits=4)), Accuracy: $(round(100*train_acc, digits=2))%")
+            println("  Test Loss: $(round(test_loss, digits=4)), Accuracy: $(round(100*test_acc, digits=2))%")
+        end
+    end
+    
+    # Step 5: Evaluate the model
+    println("\nEvaluating final model...")
+    
+    # Make predictions on test set
+    test_preds = model(X_test)
+    
+    # Create confusion matrix
+    pred_classes = onecold(test_preds)
+    true_classes = onecold(y_test)
+    
+    conf_matrix = zeros(Int, output_size, output_size)
+    for i in 1:length(pred_classes)
+        if i <= length(true_classes)
+            conf_matrix[true_classes[i], pred_classes[i]] += 1
+        end
+    end
+    
+    # Calculate overall accuracy
+    final_accuracy = sum(diag(conf_matrix)) / sum(conf_matrix)
+    println("Final accuracy: $(round(100*final_accuracy, digits=2))%")
+    
+    # Step 6: Visualize results
+    println("Creating visualizations...")
+    
+    # Plot training and validation metrics
+    p1 = plot(
+        1:epochs,
+        [train_losses test_losses],
+        label=["Training Loss" "Validation Loss"],
+        title="Loss Over Epochs",
+        xlabel="Epoch",
+        ylabel="Loss",
+        lw=2
+    )
+    
+    p2 = plot(
+        1:epochs,
+        [train_accs test_accs] .* 100,
+        label=["Training Accuracy" "Validation Accuracy"],
+        title="Accuracy Over Epochs",
+        xlabel="Epoch",
+        ylabel="Accuracy (%)",
+        lw=2,
+        ylims=(0, 100)
+    )
+    
+    p3 = heatmap(
+        1:output_size, 1:output_size, conf_matrix',
+        c=:viridis,
+        xticks=(1:output_size, unique_classes),
+        yticks=(1:output_size, unique_classes),
+        xrotation=45,
+        xlabel="True Label",
+        ylabel="Predicted Label",
+        title="Confusion Matrix",
+        guidefontsize=10,
+        tickfontsize=8
+    )
+    
+    # Add text annotations to confusion matrix
+    for i in 1:output_size, j in 1:output_size
+        annotate!(p3, j, i, text(string(conf_matrix[i, j]), :white, :center, 8))
+    end
+    
+    # Combine plots
+    final_plot = plot(p1, p2, p3, layout=(3, 1), size=(700, 900))
+    display(final_plot)
+    
+    return Dict(
+        "model" => model,
+        "classes" => unique_classes,
+        "accuracy" => final_accuracy,
+        "confusion_matrix" => conf_matrix,
+        "plots" => final_plot
+    )
+end
+
+# How to use this function:
+# results = classify_hetdex_objects(filtered_df_new_per)
+
+# Function to predict new data
+
+# ╔═╡ 26b45206-006e-4663-aa73-f9180fac44be
+function predict_hetdex_objects(model, new_data, classes, feature_columns=[:RA, :DEC, :z_hetdex, :continuum])
+    # Extract features
+    X = Matrix{Float64}(new_data[:, feature_columns])
+    
+    # Normalize features (same as in training)
+    X_norm = similar(X)
+    for j in 1:size(X, 2)
+        μ = mean(X[:, j])
+        σ = std(X[:, j])
+        X_norm[:, j] = (X[:, j] .- μ) ./ (σ + eps())
+    end
+    
+    # Transpose for Flux (columns are samples)
+    X_norm_t = Matrix{Float64}(X_norm')
+    
+    # Get predictions
+    preds = model(X_norm_t)
+    pred_indices = onecold(preds)
+    
+    # Convert indices back to class labels
+    pred_labels = [classes[idx] for idx in pred_indices]
+    
+    # Create DataFrame with predictions
+    results_df = DataFrame(
+        predicted_class = pred_labels,
+        confidence = [maximum(preds[:, i]) for i in 1:size(preds, 2)]
+    )
+    
+    return results_df
+end
+
+# ╔═╡ 9868e1a5-79d4-4cd0-bdaf-104ed1f15282
 begin
+	results = classify_hetdex_objects(filtered_df_new_per)
 	
-	# Convert categorical labels to numerical indices
-	function encode_labels(labels)
-	    classes = unique(labels)
-	    return [findfirst(==(label), classes) for label in labels], classes
-	end
-	# Load and preprocess data
-	function preprocess_data(df)
-	    # Select only numerical columns
-	    numeric_df = select(df, filter(c -> eltype(df[!, c]) <: Number, names(df)))
+	#Uncomment once the lin works the trained model
+	model = results["model"]
+	classes = results["classes"]
+	# Use some of the test data as "new" input
+	new_data = filtered_df_new_per[1:5, :]
 	
-	    features = Matrix(numeric_df)  # Convert to matrix
-	    labels, classes = encode_labels(df.source_type)     # Convert source_type to numbers
-	    labels = Flux.onehotbatch(labels, 1:length(classes)) # One-hot encode labels
-	
-	    # Normalize features
-	    features = (features .- mean(features, dims=2)) ./ std(features, dims=2)
-	
-	    return features, labels, classes
-	end
-	
-	
-	# Split data into training and testing sets
-	function split_data(features, labels, train_ratio=0.8)
-	    n = size(features, 2)
-	    idx = randperm(n)
-	    train_size = Int(round(train_ratio * n))
-	    
-	    train_idx, test_idx = idx[1:train_size], idx[train_size+1:end]
-	
-	    return features[:, train_idx], labels[:, train_idx], features[:, test_idx], labels[:, test_idx]
-	end
-	
-	# Define the neural network model
-	function build_model(input_size, output_size)
-	    return Chain(
-	        Dense(input_size, 32, relu),
-	        Dense(32, 16, relu),
-	        Dense(16, output_size),
-	        softmax
-	    )
-	end
-	
-	# Train the model
-	function train_model(model, x_train, y_train, epochs=50, lr=0.01)
-	    loss_fn = Flux.crossentropy
-	    opt = Adam(lr)
-	    losses = []
-	
-	    for epoch in 1:epochs
-	        loss, grads = Flux.withgradient(m -> loss_fn(m(x_train), y_train), model)
-	        Flux.update!(opt, model, grads)
-	
-	        push!(losses, loss)
-	        println("Epoch $epoch: Loss = $loss")
-	    end
-	
-	    return losses
-	end
-	
-	# Evaluate model performance
-	function evaluate_model(model, x_test, y_test, classes)
-	    y_pred = model(x_test)
-	    y_pred_labels = Flux.onecold(y_pred, 1:length(classes))
-	    y_true_labels = Flux.onecold(y_test, 1:length(classes))
-	
-	    accuracy = sum(y_pred_labels .== y_true_labels) / length(y_true_labels)
-	    println("Test Accuracy: ", accuracy)
-	
-	    # Scatter plot for visualization
-	    scatter(x_test[1, :], x_test[2, :], group=y_pred_labels, title="Neural Network Classification", legend=:topright)
-	end
-	
-	# Main execution
-	function main(df)
-	    features, labels, classes = preprocess_data(df)
-	    x_train, y_train, x_test, y_test = split_data(features, labels)
-	
-	    model = build_model(size(x_train, 1), size(y_train, 1))
-	
-	    println("Training the model...")
-	    losses = train_model(model, x_train, y_train)
-	
-	    println("Evaluating the model...")
-	    evaluate_model(model, x_test, y_test, classes)
-	
-	    # Plot training loss
-	    plot(1:length(losses), losses, xlabel="Epochs", ylabel="Loss", title="Training Loss", lw=2)
-	end
-	
-	# Run with your filtered dataset
-	main(filtered_df_new_per)
-	
+	predictions = predict_hetdex_objects(model, new_data, classes)
 end
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
@@ -394,7 +575,9 @@ Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MLUtils = "f1d291b0-491e-4a28-83b9-f70985020b54"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoLinks = "0ff47ea0-7a50-410d-8455-4348d5de0420"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
@@ -411,12 +594,12 @@ Flux = "~0.16.3"
 HTTP = "~1.10.15"
 LaTeXStrings = "~1.4.0"
 MLUtils = "~0.4.7"
-Plots = "~1.40.9"
+Plots = "~1.40.11"
 PlutoLinks = "~0.1.6"
 PlutoUI = "~0.7.61"
 PyCall = "~1.96.4"
 Statistics = "~1.11.1"
-StatsBase = "~0.34.4"
+StatsBase = "~0.33.21"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -425,7 +608,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.2"
 manifest_format = "2.0"
-project_hash = "55b0b3901bef83bf479da337dfd8fec5a84b235d"
+project_hash = "d6c8353688c38dea31586a363b7b7b91c71b8bf1"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -470,25 +653,19 @@ version = "0.1.42"
 
 [[deps.Adapt]]
 deps = ["LinearAlgebra", "Requires"]
-git-tree-sha1 = "cd8b948862abee8f3d3e9b73a102a9ca924debb0"
+git-tree-sha1 = "f7817e2e585aa6d924fd714df1e2a84be7896c60"
 uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
-version = "4.2.0"
+version = "4.3.0"
 weakdeps = ["SparseArrays", "StaticArrays"]
 
     [deps.Adapt.extensions]
     AdaptSparseArraysExt = "SparseArrays"
     AdaptStaticArraysExt = "StaticArrays"
 
-[[deps.AliasTables]]
-deps = ["PtrArrays", "Random"]
-git-tree-sha1 = "9876e1e164b144ca45e9e3198d0b689cadfed9ff"
-uuid = "66dad0bd-aa9a-41b7-9441-69ab47430ed8"
-version = "1.1.3"
-
 [[deps.ArgCheck]]
-git-tree-sha1 = "680b3b8759bd4c54052ada14e52355ab69e07876"
+git-tree-sha1 = "f9e9a66c9b7be1ad7372bbd9b062d9230c30c5ce"
 uuid = "dce04be8-c92d-5529-be00-80e4d2c0e197"
-version = "2.4.0"
+version = "2.5.0"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -571,9 +748,9 @@ version = "0.10.15"
 
 [[deps.Cairo_jll]]
 deps = ["Artifacts", "Bzip2_jll", "CompilerSupportLibraries_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "LZO_jll", "Libdl", "Pixman_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "009060c9a6168704143100f36ab08f06c2af4642"
+git-tree-sha1 = "2ac646d71d0d24b44f3f8c84da8c9f4d70fb67df"
 uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
-version = "1.18.2+1"
+version = "1.18.4+0"
 
 [[deps.ChainRules]]
 deps = ["Adapt", "ChainRulesCore", "Compat", "Distributed", "GPUArraysCore", "IrrationalConstants", "LinearAlgebra", "Random", "RealDot", "SparseArrays", "SparseInverseSubset", "Statistics", "StructArrays", "SuiteSparse"]
@@ -717,9 +894,9 @@ version = "1.7.0"
 
 [[deps.DataStructures]]
 deps = ["Compat", "InteractiveUtils", "OrderedCollections"]
-git-tree-sha1 = "1d0a14036acb104d9e89698bd408f63ab58cdc82"
+git-tree-sha1 = "4e1fe97fdaed23e9dc21d4d664bea76b65fc50a0"
 uuid = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
-version = "0.18.20"
+version = "0.18.22"
 
 [[deps.DataValueInterfaces]]
 git-tree-sha1 = "bfc1187b79289637fa0ef6d4436ebdfe6905cbd6"
@@ -1303,9 +1480,9 @@ uuid = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
 version = "3.1.0"
 
 [[deps.MIMEs]]
-git-tree-sha1 = "1833212fd6f580c20d4291da9c1b4e8a655b128e"
+git-tree-sha1 = "c64d943587f7187e751162b3b84445bbbd79f691"
 uuid = "6c6e2e6c-3030-632d-7369-2d6c69616d65"
-version = "1.0.0"
+version = "1.1.0"
 
 [[deps.MLCore]]
 deps = ["DataAPI", "SimpleTraits", "Tables"]
@@ -1315,9 +1492,9 @@ version = "1.0.0"
 
 [[deps.MLDataDevices]]
 deps = ["Adapt", "Compat", "Functors", "Preferences", "Random"]
-git-tree-sha1 = "7ebebb5ed33cb29b3b91917bb0e8d88cf2c0d570"
+git-tree-sha1 = "1326836c4c845cfabc542b658c8686f0c31a9911"
 uuid = "7e8f7934-dd98-4c1a-8fe8-92b47a384d40"
-version = "1.7.0"
+version = "1.9.1"
 
     [deps.MLDataDevices.extensions]
     MLDataDevicesAMDGPUExt = "AMDGPU"
@@ -1417,10 +1594,10 @@ uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
 version = "2023.12.12"
 
 [[deps.NNlib]]
-deps = ["Adapt", "Atomix", "ChainRulesCore", "GPUArraysCore", "KernelAbstractions", "LinearAlgebra", "Random", "Statistics"]
-git-tree-sha1 = "e3d9a41f0e892d070d1a2a9569d73f29b3e321e3"
+deps = ["Adapt", "Atomix", "ChainRulesCore", "GPUArraysCore", "KernelAbstractions", "LinearAlgebra", "Random", "ScopedValues", "Statistics"]
+git-tree-sha1 = "e8d4268b4a438bdad98937e4bca45881363b4767"
 uuid = "872c559c-99b0-510c-b3b7-b6c96a88d5cd"
-version = "0.9.28"
+version = "0.9.29"
 
     [deps.NNlib.extensions]
     NNlibAMDGPUExt = "AMDGPU"
@@ -1542,9 +1719,9 @@ version = "1.3.0"
 
 [[deps.Pixman_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "LLVMOpenMP_jll", "Libdl"]
-git-tree-sha1 = "35621f10a7531bc8fa58f74610b1bfb70a3cfc6b"
+git-tree-sha1 = "db76b1ecd5e9715f3d043cec13b2ec93ce015d53"
 uuid = "30392449-352a-5448-841d-b1acce4e97dc"
-version = "0.43.4+0"
+version = "0.44.2+0"
 
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
@@ -1569,9 +1746,9 @@ version = "1.4.3"
 
 [[deps.Plots]]
 deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "TOML", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
-git-tree-sha1 = "dae01f8c2e069a683d3a6e17bbae5070ab94786f"
+git-tree-sha1 = "24be21541580495368c35a6ccef1454e7b5015be"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.40.9"
+version = "1.40.11"
 
     [deps.Plots.extensions]
     FileIOExt = "FileIO"
@@ -1644,11 +1821,6 @@ deps = ["Logging", "SHA", "UUIDs"]
 git-tree-sha1 = "80d919dee55b9c50e8d9e2da5eeafff3fe58b539"
 uuid = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 version = "0.1.4"
-
-[[deps.PtrArrays]]
-git-tree-sha1 = "1d36ef11a9aaf1e8b74dacc6a731dd1de8fd493d"
-uuid = "43287f4e-b6f4-7ad1-bb20-aadabca52c3d"
-version = "1.3.0"
 
 [[deps.PyCall]]
 deps = ["Conda", "Dates", "Libdl", "LinearAlgebra", "MacroTools", "Serialization", "VersionParsing"]
@@ -1865,10 +2037,10 @@ uuid = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
 version = "1.7.0"
 
 [[deps.StatsBase]]
-deps = ["AliasTables", "DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "29321314c920c26684834965ec2ce0dacc9cf8e5"
+deps = ["DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
+git-tree-sha1 = "d1bf48bfcc554a3761a133fe3a9bb01488e06916"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.34.4"
+version = "0.33.21"
 
 [[deps.StringManipulation]]
 deps = ["PrecompileTools"]
@@ -2375,7 +2547,11 @@ version = "1.4.1+2"
 # ╠═97605a73-dafd-4740-ae33-999dfa7fd7bd
 # ╠═1bb82599-45c3-4cf1-a80f-054933cc2515
 # ╠═60a700c3-354f-4948-be92-2eda822618b4
-# ╠═bc40e00f-62dd-47f1-803d-9f6aff00d7ed
+# ╠═eef14cac-4a8d-46a3-b8f3-4fc672701d53
+# ╠═a1381bc7-ecca-4617-87c6-8b0ead0940e6
+# ╠═26b45206-006e-4663-aa73-f9180fac44be
+# ╠═9868e1a5-79d4-4cd0-bdaf-104ed1f15282
+# ╠═2433a18f-d562-48f1-b151-ea33d1303fd7
 # ╠═a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
