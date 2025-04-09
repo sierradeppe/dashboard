@@ -148,6 +148,7 @@ function process_hetdex_files()
 end
 
 # ╔═╡ 08c58fe0-05cb-4261-b439-125e23bef928
+# ╠═╡ show_logs = false
 dfs = process_hetdex_files()
 
 # ╔═╡ b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
@@ -292,20 +293,23 @@ println("Filtered dataset size: ", size(filtered_df_new_per))
 
 # ╔═╡ a1381bc7-ecca-4617-87c6-8b0ead0940e6
 function classify_hetdex_objects(df)
-    # Step 1: Prepare the data
+    #Prep
     println("Preparing data...")
     
-    # Extract features (RA, DEC, z_hetdex, continuum)
+    #4 features
     features = [:RA, :DEC, :z_hetdex, :continuum]
     X = Matrix{Float64}(df[:, features])
     
-    # Extract labels (source_type)
-    y = df.source_type
+    #give it labels to learn from
+	# Extract and clean labels
+	y_raw = df.source_type
+	y = strip.(lowercase.(String.(y_raw)))  # ensure all are lowercase and stripped
+
     unique_classes = sort(unique(y))
+	println(unique_classes)
     class_to_idx = Dict(class => i for (i, class) in enumerate(unique_classes))
     y_idx = [class_to_idx[class] for class in y]
     
-    # One-hot encode the labels
     y_onehot = onehotbatch(y_idx, 1:length(unique_classes))
     
     # Normalize features for better training
@@ -446,14 +450,13 @@ function classify_hetdex_objects(df)
         end
     end
     
-    # Calculate overall accuracy
+
     final_accuracy = sum(diag(conf_matrix)) / sum(conf_matrix)
     println("Final accuracy: $(round(100*final_accuracy, digits=2))%")
     
-    # Step 6: Visualize results
     println("Creating visualizations...")
     
-    # Plot training and validation metrics
+    #plot metric
     p1 = plot(
         1:epochs,
         [train_losses test_losses],
@@ -506,10 +509,6 @@ function classify_hetdex_objects(df)
     )
 end
 
-# How to use this function:
-# results = classify_hetdex_objects(filtered_df_new_per)
-
-# Function to predict new data
 
 # ╔═╡ 26b45206-006e-4663-aa73-f9180fac44be
 function predict_hetdex_objects(model, new_data, classes, feature_columns=[:RA, :DEC, :z_hetdex, :continuum])
@@ -539,6 +538,8 @@ function predict_hetdex_objects(model, new_data, classes, feature_columns=[:RA, 
         predicted_class = pred_labels,
         confidence = [maximum(preds[:, i]) for i in 1:size(preds, 2)]
     )
+	println("Prediction labels:")
+	println(pred_labels)
     
     return results_df
 end
@@ -554,6 +555,8 @@ begin
 	new_data = filtered_df_new_per[1:5, :]
 	
 	predictions = predict_hetdex_objects(model, new_data, classes)
+	println("Classes:")
+	println(classes)
 end
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
