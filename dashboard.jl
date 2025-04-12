@@ -30,7 +30,7 @@ begin
 	using MLBase
 	using GLM
 	using KernelDensity
-	
+	using Colors, ColorSchemes	
 	Random.seed!(42)                     
 end;
 
@@ -41,7 +41,7 @@ md"""
 
 # ╔═╡ 7992ba99-db91-45b1-bcdd-4be7c273417f
 md"""
-## Ingest & validate data
+# Ingest & validate data
 """
 
 # ╔═╡ 7fcdc2bb-cc2d-4601-9327-69a9794e1faa
@@ -54,7 +54,7 @@ end
 md"""
 \
 
-### Querying the Data
+## Querying the Data
 
 We download chosen files from the HETDEX catalogue and then convert the native ECSV file to a dataframe more familiar to Julia.
 """
@@ -63,7 +63,7 @@ We download chosen files from the HETDEX catalogue and then convert the native E
 md"""
 \
 
-### Preprocessing
+## Preprocessing
 
 Here the user can select which sources they are interested in looking at. A plot of redshift vs. continuum is given to visualize patterns among the three objects. 
 
@@ -78,11 +78,48 @@ Low Redshift Galaxies: $(@bind show_lzg CheckBox(;default=true))
 Active Galactic Nuclei: $(@bind show_agn CheckBox(;default=true))
 """
 
+# ╔═╡ 3f822b20-8aec-42c2-bec9-2676ad39f5d2
+begin
+    types = [
+        :z_hetdex     "Redshift";
+        :continuum    "Continuum (1e-17 erg/cm²/s/Å)";
+        :flux         "Flux (erg/cm²/s)";
+        :gmag         "SDSS-g Magnitude";
+        :Av           "Av (Applied V Band Dust Correction)";
+        :sn           "Signal-to-Noise";
+        :sigma        "StDev of Gaussian Fit (Å)";
+        :apcor        "Aperture Correction Applied at 4500Å";
+        :wave         "Central Emission Wavelength (Å)"
+    ]
+
+    md"""
+    X-Axis: $(@bind row_type Select(types[:, 2]))
+    Y-Axis: $(@bind col_type Select(types[:, 2]))
+    """
+end
+
+
+# ╔═╡ 8cc2e79a-a876-4771-b721-1b00da75f644
+begin
+    # Find the indices where the conditions match
+    x_idx = findfirst(types[:, 2] .== row_type)
+    y_idx = findfirst(types[:, 2] .== col_type)
+    
+    # Get the column names for plotting
+    x_col = types[x_idx, 1]
+    y_col = types[y_idx, 1]
+	print("")
+    
+    # For debugging/visibility
+    # println("X column: ", x_col, " (", row_type, ")")
+    # println("Y column: ", y_col, " (", col_type, ")")
+end
+
 # ╔═╡ c10ffd55-2cc1-4e79-9b70-e515e5baf7ad
 md"""
 \
 
-### Basic Filtering
+## Basic Filtering
 
 Below, continuum values below zero are removed to create our baseline dataframe. The first option for filtering is introduced in which any data farther than 3σ is removed. This is a very common technique in astronomy. 
 """
@@ -106,7 +143,7 @@ end
 md"""
 \
 
-### MAD Filtering Technique
+## MAD Filtering Technique
 
 The below cell uses Median Absolute Deviation (MAD) in order to decide whether to take a more passive or aggressive approach. We can decide what constitutes a "high" or "low" threshold based entirely on what we know about the data and it's spread. 
 
@@ -117,11 +154,62 @@ A higher MAD threshold implies the presence of more significant outliers. In thi
 
 # ╔═╡ cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 md"""
-## Logistic Regression Model - Classification
+\
+
+# Logistic Regression Model - Classification
+The logistic regression model traditionally classifies between two objects as a binary selector. In order to classify three types of sources - LAE, LZG, AGN - the model is adjusted to go through the classification process three times. It assigns a true value to the desired source and false to the other two and finds the likelihood that each object is one source over the others. Comparing these three likelihoods is the final step in assigning the highest likelihood source type to each object.
 """
 
+# ╔═╡ 06078401-9a5a-41bf-a971-060466db94fe
+md"""
+Choose which parameters you'd like to use for this model:
+
+Redshift: $(@bind z_hetdex CheckBox(;default=true)) 
+     SDSS_G Magnitude: $(@bind gmag CheckBox(;default=true)) 
+     Extinction: $(@bind Av CheckBox(;default=true))
+     Flux: $(@bind flux CheckBox(;default=true)) 
+     Wavelength: $(@bind wave CheckBox(;default=true))
+
+Signal-to-Noise: $(@bind sn CheckBox(;default=true)) 
+     Continuum: $(@bind continuum CheckBox(;default=true))
+     Aperture Correction: $(@bind apcor CheckBox(;default=true)) 
+     Sigma Linewidth: $(@bind sigma CheckBox(;default=true))
+
+"""
+
+
+# ╔═╡ a59b1973-145d-4ff6-9ccb-52fff65abd9b
+begin    
+    # Build the formula string
+    parameters = String[]
+    for sym in [:z_hetdex, :gmag, :Av, :flux, :sn, :continuum, :apcor, :sigma, :wave]
+        if eval(sym)
+            push!(parameters, String(sym))
+        end
+    end
+    
+    formula_string = "source_type ~ 1 + " * join(parameters, " + ") 
+	print("")
+end
+
 # ╔═╡ b2af9b62-0ef5-452b-9907-acf402514906
-fm_all = @formula(source_type ~ 1+ z_hetdex + gmag + Av + flux + continuum)
+fm_all = eval(Meta.parse("@formula(" * formula_string * ")"))
+
+# ╔═╡ 30c918e8-29e2-4cd3-9cfb-180f90024449
+md"""
+\
+
+## Running the algorithm
+The below cell runs the formula to generate a model for each source type. The following cell then makes predictions, assigns classifications, checks accuracy, and displays the results for easy review.
+"""
+
+# ╔═╡ 4b3932b9-dfdc-4e85-9760-d863cfd8abce
+md"""
+\
+
+## Visualization
+See the true vs misclassified objects below in two formats. Adjust the x and y sliders to zoom in as much as desired.
+"""
 
 # ╔═╡ bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
 md"Slide to adjust x domain: $(@bind x_max1 Slider(0:10:2000; default=1000, show_value=true))"
@@ -269,19 +357,38 @@ begin
 	filtered_df
 end
 
-# ╔═╡ cc1605fc-210b-4d15-b3a9-9115716a647b
-source_types = unique(filtered_df.source_type)
-
 # ╔═╡ 156347d1-4d07-4745-90c8-1287d2179a79
 begin
-	plt1 = plot()
-	for source_type in source_types
+	source_types = unique(filtered_df.source_type)
+    scalefontsizes()
+    scalefontsizes(1)
+    my_font = "Helvetica"
+    my_palette = ColorSchemes.tol_incandescent
+    colors = [get(my_palette, i) for i in (0.2, 0.5, 0.9)]  # Extract colors from the palette
+    
+    plt = plot(
+        legend = :topright,
+        fontfamily = my_font,
+        xlabel = row_type,
+        ylabel = col_type,
+        title = "$(row_type) vs $(col_type)"
+    )
+    
+    for (i, source_type) in enumerate(source_types)
         type_data = filter(row -> row.source_type == source_type, filtered_df)
-		scatter!(plt1,type_data.z_hetdex,type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Comntinuum (erg/cm^2/s)")
-	end
-	
-	display(plt1)
-	plt1
+        
+        scatter!(
+            plt,
+            type_data[:, x_col],  # Use the dynamically selected x parameter
+            type_data[:, y_col],  # Use the dynamically selected y parameter
+            markercolor = colors[i],
+            label = source_type,
+            markersize = 3,
+            markerstrokewidth = 0.5
+        )
+    end
+    
+    plt
 end
 
 # ╔═╡ 7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
@@ -340,14 +447,32 @@ end
 # ╔═╡ 1bb82599-45c3-4cf1-a80f-054933cc2515
 # ╠═╡ show_logs = false
 begin
-	plt2 = plot()
-	for source_type in source_types
-	    type_data = filter(row -> row.source_type == source_type, filtered_df_new_per)
-	    scatter!(plt2, type_data.z_hetdex, type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Continuum (erg/cm²/s)")
-	end
-	
-	display(plt2)
-	plt2
+    scalefontsizes()
+    scalefontsizes(1)
+    
+    plt2 = plot(
+        legend = :topright,
+        fontfamily = my_font,
+        xlabel = row_type,
+        ylabel = col_type,
+        title = "$(row_type) vs $(col_type)"
+    )
+    
+    for (i, source_type) in enumerate(source_types)
+        type_data = filter(row -> row.source_type == source_type, filtered_df_new_per)
+        
+        scatter!(
+            plt2,
+            type_data[:, x_col],  # Use the dynamically selected x parameter
+            type_data[:, y_col],  # Use the dynamically selected y parameter
+            markercolor = colors[i],
+            label = source_type,
+            markersize = 3,
+            markerstrokewidth = 0.5
+        )
+    end
+    
+    plt2
 end
 
 # ╔═╡ 60a700c3-354f-4948-be92-2eda822618b4
@@ -673,6 +798,7 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 ColorSchemes = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
+Colors = "5ae59095-9a9b-59fe-a467-6f913c188581"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
@@ -697,6 +823,7 @@ Turing = "fce5fe82-541a-59a6-adf8-730c64b5f9a0"
 [compat]
 CSV = "~0.10.15"
 ColorSchemes = "~3.29.0"
+Colors = "~0.13.0"
 DataFrames = "~1.7.0"
 Distributions = "~0.25.118"
 Flux = "~0.14.25"
@@ -723,7 +850,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.2"
 manifest_format = "2.0"
-project_hash = "ae2c579df0dae2d4f4a0a83fcbc0c2b32058ad61"
+project_hash = "57a24ba5d48389512c1449393fa12ccd65e1f092"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "e2478490447631aedba0823d4d7a80b2cc8cdb32"
@@ -3613,8 +3740,9 @@ version = "1.4.1+2"
 # ╟─92be734b-4a14-4f51-96d6-bd70664db385
 # ╟─4ffdd47c-2f29-4807-a0d6-816f547e9f36
 # ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
-# ╠═cc1605fc-210b-4d15-b3a9-9115716a647b
-# ╠═156347d1-4d07-4745-90c8-1287d2179a79
+# ╟─156347d1-4d07-4745-90c8-1287d2179a79
+# ╟─3f822b20-8aec-42c2-bec9-2676ad39f5d2
+# ╟─8cc2e79a-a876-4771-b721-1b00da75f644
 # ╟─c10ffd55-2cc1-4e79-9b70-e515e5baf7ad
 # ╠═7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
 # ╠═7b40310a-5555-4567-937e-5002563f547d
@@ -3625,9 +3753,13 @@ version = "1.4.1+2"
 # ╠═1bb82599-45c3-4cf1-a80f-054933cc2515
 # ╠═60a700c3-354f-4948-be92-2eda822618b4
 # ╟─cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
+# ╟─06078401-9a5a-41bf-a971-060466db94fe
+# ╟─a59b1973-145d-4ff6-9ccb-52fff65abd9b
 # ╠═b2af9b62-0ef5-452b-9907-acf402514906
+# ╟─30c918e8-29e2-4cd3-9cfb-180f90024449
 # ╠═6e060af6-2a84-4118-b6d2-fc90f213b183
 # ╠═1d61a378-6f6a-459a-a280-2ca0eea69b5f
+# ╟─4b3932b9-dfdc-4e85-9760-d863cfd8abce
 # ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
 # ╟─bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
 # ╟─05de7c5b-cd38-4cf7-8530-34c22d63ca79
