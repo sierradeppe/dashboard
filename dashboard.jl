@@ -52,7 +52,6 @@ end
 
 # ╔═╡ f9cde89e-4ec9-4076-baa9-a2189a976ffb
 md"""
-\
 
 ## Querying the Data
 
@@ -152,6 +151,26 @@ A low MAD threshold suggests that the data might be very flat and absolute devia
 A higher MAD threshold implies the presence of more significant outliers. In this case, any data that is within 10x the threshold is kept to remove only the most extreme of outliers, and all other points are discarded. This method typically results in keeping more data.
 """
 
+# ╔═╡ 97605a73-dafd-4740-ae33-999dfa7fd7bd
+function filter_extrema(df::DataFrame, colname::Symbol)
+    col = df[!, colname]
+    col_median = median(col)
+    col_mad = 1.4826 * median(abs.(col .- col_median))
+    println("MAD for $colname: $col_mad")
+
+    if col_mad < 0.3
+        println("MAD too small for $colname, using percentiles")
+        pi = percentile(col, 1)
+        pf = percentile(col, 99)
+        return (pi .≤ col) .& (col .≤ pf)
+    else
+        println("Using MAD filter for $colname")
+        threshold = 10
+        return abs.(col .- col_median) .≤ (threshold * col_mad)
+    end
+end
+
+
 # ╔═╡ cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 md"""
 \
@@ -203,6 +222,24 @@ md"""
 The below cell runs the formula to generate a model for each source type. The following cell then makes predictions, assigns classifications, checks accuracy, and displays the results for easy review.
 """
 
+# ╔═╡ db456dab-1e63-4378-9c0d-1e98bcc022f0
+begin
+	Tri = false
+	Bi = false
+	
+	if show_agn && show_lae && show_lzg
+		Tri = true
+	else
+		Bi = true
+	end
+	print("")
+end
+
+# ╔═╡ e374f348-cc30-410f-8f33-3b1b04febc82
+md"""
+Results - 
+"""
+
 # ╔═╡ 4b3932b9-dfdc-4e85-9760-d863cfd8abce
 md"""
 \
@@ -211,17 +248,42 @@ md"""
 See the true vs misclassified objects below in two formats. Adjust the x and y sliders to zoom in as much as desired.
 """
 
+# ╔═╡ d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
+md"""
+X-Axis: $(@bind row_type2 Select(types[:, 1]))
+Y-Axis: $(@bind col_type2 Select(types[:, 1]))
+"""
+
 # ╔═╡ bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
-md"Slide to adjust x domain: $(@bind x_max1 Slider(0:10:2000; default=1000, show_value=true))"
+md"""
+Slide to adjust x domain: 
+    Min: $(@bind x_min1 Slider(0:10:2000; default=0, show_value=true)) 
+    Max: $(@bind x_max1 Slider(0:10:2000; default=1000, show_value=true))
+"""
 
 # ╔═╡ 05de7c5b-cd38-4cf7-8530-34c22d63ca79
-md"Slide to adjust y range: $(@bind y_max1 Slider(0.1:0.1:30; default=1000, show_value=true))"
+md"""
+Slide to adjust y range: 
+    Min: $(@bind y_min1 Slider(0.1:0.1:30; default=0, show_value=true))
+    Max: $(@bind y_max1 Slider(0.1:0.1:30; default=28, show_value=true))
+"""
+
+# ╔═╡ 3d693c6c-3cb6-4172-8356-ba8716d66efc
+
 
 # ╔═╡ d8669fd4-ec53-456f-9be9-f3198a914185
-md"Slide to adjust x domain: $(@bind x_max2 Slider(0:10:2000; default=200, show_value=true))"
+md"""
+Slide to adjust x domain: 
+    Min: $(@bind x_min2 Slider(0:10:2000; default=0, show_value=true)) 
+    Max: $(@bind x_max2 Slider(0:10:2000; default=1000, show_value=true))
+"""
 
 # ╔═╡ 9f1d4678-d25e-4b07-81d3-7db7049a83c2
-md"Slide to adjust y range: $(@bind y_max2 Slider(0.1:0.1:30; default=10, show_value=true))"
+md"""
+Slide to adjust y range: 
+    Min: $(@bind y_min2 Slider(0:0.1:30; default=0, show_value=true)) 
+    Max: $(@bind y_max2 Slider(0:0.1:30; default=28, show_value=true))
+"""
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
@@ -237,7 +299,13 @@ md"""
 # Reference Code
 """
 
+# ╔═╡ d65139ac-0e8c-4c57-979d-8762bae8a299
+md" ### Data Injestion"
+
 # ╔═╡ 43df897b-9714-4896-a811-957050636c1d
+"""
+Download HETDEX files from source URL
+"""
 function download_hetdex_file(file_name)
     if isfile(file_name)
         println("File already exists: $file_name")
@@ -416,32 +484,20 @@ end
 # ╔═╡ c03dadf8-011e-4b69-96fe-83330bf1f20a
 println("Filtered dataset size: ", size(filtered_df_new_std))
 
-# ╔═╡ 97605a73-dafd-4740-ae33-999dfa7fd7bd
+# ╔═╡ 79c8e397-c121-4553-9e45-c3005a737fdf
 begin
-	begin
-		function filter_extreme_continuum(df)
-		    cont_median = median(df.continuum)
-		    cont_mad = 1.4826 * median(abs.(df.continuum .- cont_median))
-			println(cont_mad)
-		
-		    # If MAD is too small, use percentile-based approach
-		    if cont_mad < 0.3
-		        println("MAD is too small, switching to percentile approach")
-		        pi = percentile(df.continuum, 1)
-		        pf = percentile(df.continuum, 99)
-		        df = filter(row -> pi ≤ row.continuum ≤ pf , df)
-				#df = filter(row -> p05 >= row.continuum , df)
-		    else
-				println("Running lenient filtering")
-		        threshold = 10  # More lenient filtering, keeping more data
-		        df = filter(row -> abs(row.continuum - cont_median) ≤ threshold * cont_mad, df)
-		    end
-		
-		    return df
-		end
-		
-		filtered_df_new_per = filter_extreme_continuum(filtered_df_new)
+	cols_to_filter = [:continuum, :gmag, :sigma, :flux, :sn, :Av, :wave, :z_hetdex, :apcor]
+	
+	# Start with all `true`
+	combined_mask = trues(nrow(filtered_df_new))
+	
+	for col in cols_to_filter
+	    mask = filter_extrema(filtered_df_new, col)
+	    combined_mask .&= mask  # keep only rows that pass *all* filters
 	end
+	
+	filtered_df_new_per = filtered_df_new[combined_mask, :]
+	
 end
 
 # ╔═╡ 1bb82599-45c3-4cf1-a80f-054933cc2515
@@ -478,9 +534,31 @@ end
 # ╔═╡ 60a700c3-354f-4948-be92-2eda822618b4
 size(filtered_df_new_per)
 
+# ╔═╡ f3c7b4fc-4711-4984-bc57-041b0ae4ba74
+md" ### Preprocessing"
+
+# ╔═╡ c52f5a4b-e6af-482f-8ac7-6980c656bb78
+"""
+Changes source type to integers for binary logreg classification model
+"""
+function encode_two(df::DataFrame)
+    selected = String[]
+    if show_agn; push!(selected, "agn"); end
+    if show_lae; push!(selected, "lae"); end
+    if show_lzg; push!(selected, "lzg"); end
+
+    # Arbitrarily assign 1 and 0
+    mapping = Dict(selected[1] => 1, selected[2] => 0)
+
+    df_copy = copy(df)
+    df_copy.source_type = [mapping[val] for val in df_copy.source_type if haskey(mapping, val)]
+
+    return df_copy, mapping
+end
+
 # ╔═╡ 2cd1500d-c91d-4a6c-9390-9f3723b637f7
 """
-Changes source type to integers for logreg classification model
+Changes source type to integers for multiclass logreg classification model
 """
 function encode_source_type(df::DataFrame, source::String,og)
 	src = String[]
@@ -497,19 +575,78 @@ function encode_source_type(df::DataFrame, source::String,og)
     return df_copy
 end
 
-# ╔═╡ 6e060af6-2a84-4118-b6d2-fc90f213b183
-begin    # Classify "lae"
-    df_lae = encode_source_type(filtered_df_new_per, "lae", ["lae", "lzg", "agn"])
-    fit_lae = glm(fm_all, df_lae, Binomial(), LogitLink())
-    
-    # Classify "lzg"
-    df_lzg = encode_source_type(filtered_df_new_per, "lzg", ["lae", "lzg", "agn"])
-    fit_lzg = glm(fm_all, df_lzg, Binomial(), LogitLink())
-    
-    # Classify "agn"
-    df_agn = encode_source_type(filtered_df_new_per, "agn", ["lae", "lzg", "agn"])
-    fit_agn = glm(fm_all, df_agn, Binomial(), LogitLink())
+# ╔═╡ 00a0ff76-b5c6-4340-a146-af6bfd7cc68b
+md" ### Running the Binary LogReg Model"
+
+
+# ╔═╡ baf1a165-b56c-4562-b846-112e672fab66
+md" ### Running the Multiclass LogReg Model"
+
+# ╔═╡ ca74b449-c7ac-4db6-aa1f-2ca8284c752c
+"""
+Fit each class - when using all three
+"""
+function tri_class()    # Classify "lae"
+	    df_lae = encode_source_type(filtered_df_new_per, "lae", ["lae", "lzg", "agn"])
+	    fit_lae = glm(fm_all, df_lae, Binomial(), LogitLink())
+	    
+	    # Classify "lzg"
+	    df_lzg = encode_source_type(filtered_df_new_per, "lzg", ["lae", "lzg", "agn"])
+	    fit_lzg = glm(fm_all, df_lzg, Binomial(), LogitLink())
+	    
+	    # Classify "agn"
+	    df_agn = encode_source_type(filtered_df_new_per, "agn", ["lae", "lzg", "agn"])
+	    fit_agn = glm(fm_all, df_agn, Binomial(), LogitLink())
+		return fit_agn, fit_lae, fit_lzg
 end
+
+# ╔═╡ 6e060af6-2a84-4118-b6d2-fc90f213b183
+if Tri 
+	fit_agn, fit_lae, fit_lzg = tri_class()
+elseif Bi 
+	df_two, mapping = encode_two(filtered_df_new_per)
+	fit_two = glm(fm_all, df_two, Binomial(), LogitLink())
+else
+	print("ERROR: you must select at least two object types to run this model.")
+end
+
+# ╔═╡ 649c5cf6-ac7f-4393-b198-3edbee5bbf59
+"""
+Makes predictions and assesses model for binary classification
+"""
+function binary_predict()
+    probs = predict(fit_two, df_two)
+    predicted = [p ≥ 0.5 ? 1 : 0 for p in probs]
+
+    # Reverse the mapping
+    rev_mapping = Dict(v => k for (k, v) in mapping)
+    predicted_labels = [rev_mapping[val] for val in predicted]
+    actual_labels = [rev_mapping[val] for val in df_two.source_type]
+
+    correct = sum(predicted_labels .== actual_labels)
+    accuracy = correct / length(actual_labels)
+
+    # Confusion matrix
+    labels = collect(values(rev_mapping))  # 2-class labels
+    conf_matrix = zeros(Int, 2, 2)
+    for i in 1:length(actual_labels)
+        a = findfirst(labels .== actual_labels[i])
+        p = findfirst(labels .== predicted_labels[i])
+        conf_matrix[a, p] += 1
+    end
+
+    conf_df = DataFrame(
+	    Symbol("predicted_" * labels[1]) => conf_matrix[:, 1],
+	    Symbol("predicted_" * labels[2]) => conf_matrix[:, 2]
+	)
+	conf_df[!, :actual_class] = ["actual_" * labels[1], "actual_" * labels[2]]
+	conf_df = conf_df[:, [:actual_class, Symbol("predicted_" * labels[1]), Symbol("predicted_" * labels[2])]]
+
+
+    println("Model Accuracy: $(round(accuracy * 100, digits=2))%")
+    return predicted_labels, conf_df
+end
+
 
 # ╔═╡ 12e37b21-5bf0-4feb-86b0-81b4734e09a8
 """
@@ -547,6 +684,9 @@ end
 
 
 # ╔═╡ 39ce14f7-c495-4d75-be11-93ccef40c773
+"""
+Check model predictions against true classes
+"""
 function evaluate_model(df, predictions)
     actual = df.source_type
     correct = sum(predictions .== actual)
@@ -569,30 +709,48 @@ function evaluate_model(df, predictions)
     )
 end
 
-# ╔═╡ 1d61a378-6f6a-459a-a280-2ca0eea69b5f
-begin
-    # Make predictions on your dataset
-    predictions = predict_all_sources(filtered_df_new_per, fit_lae, fit_lzg, fit_agn)
-    
-    # Evaluate the model
-    results = evaluate_model(filtered_df_new_per, predictions)
-    
-    # Print results
-    println("Model Accuracy: $(round(results["accuracy"] * 100, digits=2))%")
-    conf_matrix_df = DataFrame(results["confusion_matrix"], 
-    [:predicted_lae, :predicted_lzg, :predicted_agn]
+# ╔═╡ 4dc0a3c0-8a36-46ce-bde7-3cf9475ffc06
+"""
+Classify each object when using all three classes
+"""
+function tri_pred()
+	# Make predictions on your dataset
+	predictions = predict_all_sources(filtered_df_new_per, fit_lae, fit_lzg, fit_agn)
+	    
+	# Evaluate the model
+	results = evaluate_model(filtered_df_new_per, predictions)
+	    
+	# Print results
+	println("Model Accuracy: $(round(results["accuracy"] * 100, digits=2))%")
+	conf_matrix_df = DataFrame(results["confusion_matrix"], 
+	[:predicted_lae, :predicted_lzg, :predicted_agn]
 	)
-
+	
 	# Rename the rows with actual classes
 	conf_matrix_df[!, :actual_class] = ["actual_lae", "actual_lzg", "actual_agn"]
-	
+		
 	# Reorder columns to put the row labels first
 	conf_matrix_df = conf_matrix_df[:, [:actual_class, :predicted_lae, :predicted_lzg, :predicted_agn]]
-	
-	conf_matrix_df
+		
+	return predictions, conf_matrix_df
 end
 
+# ╔═╡ 1d61a378-6f6a-459a-a280-2ca0eea69b5f
+if Tri
+	predictions, conf_matrix_df = tri_pred()
+	conf_matrix_df
+elseif Bi
+	predictions, conf_df = binary_predict()
+	conf_df
+end
+
+# ╔═╡ 492c00e5-6d83-4da5-bb6c-4d3af1669f37
+md" ### Visualization"
+
 # ╔═╡ 1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
+"""
+Create two scatter plots side by side
+"""
 function plot_scatter(df, predictions, feature_x, feature_y, axes)
     # Set up plot area
     plt = plot(layout=(1, 2), size=(1000, 450))
@@ -672,9 +830,18 @@ function plot_scatter(df, predictions, feature_x, feature_y, axes)
 end
 
 # ╔═╡ 72bcd4fb-b1b3-446e-be0c-10b17218ab66
-plot_scatter(filtered_df_new_per, predictions, :flux, :continuum, [0,x_max1,0,y_max1])
+begin
+	if x_min1 ≥ x_max1 || y_min1 ≥ y_max1
+		print("Error: minimum range must be less than maximum range evaluate_model.")
+	end
+
+	plot_scatter(filtered_df_new_per, predictions, row_type2, col_type2, [x_min1,x_max1,y_min1,y_max1])
+end
 
 # ╔═╡ beb08440-6ca8-4232-bc88-4eb0bd796603
+"""
+Create two heatmap plots side by side
+"""
 function plot_heat(df, predictions, feature_x, feature_y, axes, bins=20)
     # Set up plot area
     plt = plot(layout=(1, 2), size=(1000, 450))
@@ -791,7 +958,7 @@ function plot_heat(df, predictions, feature_x, feature_y, axes, bins=20)
 end
 
 # ╔═╡ fa59defd-6da1-47ee-974c-68cee481e032
-plot_heat(filtered_df_new_per, predictions, :flux, :continuum, [0,x_max2,0,y_max2], 100)
+plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2,y_min2,y_max2], 100)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -3750,32 +3917,46 @@ version = "1.4.1+2"
 # ╠═c03dadf8-011e-4b69-96fe-83330bf1f20a
 # ╟─318e021b-09d0-4c61-bb70-63f3267d89e3
 # ╠═97605a73-dafd-4740-ae33-999dfa7fd7bd
-# ╠═1bb82599-45c3-4cf1-a80f-054933cc2515
+# ╠═79c8e397-c121-4553-9e45-c3005a737fdf
+# ╟─1bb82599-45c3-4cf1-a80f-054933cc2515
 # ╠═60a700c3-354f-4948-be92-2eda822618b4
 # ╟─cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 # ╟─06078401-9a5a-41bf-a971-060466db94fe
 # ╟─a59b1973-145d-4ff6-9ccb-52fff65abd9b
 # ╠═b2af9b62-0ef5-452b-9907-acf402514906
 # ╟─30c918e8-29e2-4cd3-9cfb-180f90024449
+# ╟─db456dab-1e63-4378-9c0d-1e98bcc022f0
 # ╠═6e060af6-2a84-4118-b6d2-fc90f213b183
+# ╟─e374f348-cc30-410f-8f33-3b1b04febc82
 # ╠═1d61a378-6f6a-459a-a280-2ca0eea69b5f
 # ╟─4b3932b9-dfdc-4e85-9760-d863cfd8abce
 # ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
+# ╟─d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
 # ╟─bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
 # ╟─05de7c5b-cd38-4cf7-8530-34c22d63ca79
-# ╟─fa59defd-6da1-47ee-974c-68cee481e032
+# ╟─3d693c6c-3cb6-4172-8356-ba8716d66efc
+# ╠═fa59defd-6da1-47ee-974c-68cee481e032
 # ╟─d8669fd4-ec53-456f-9be9-f3198a914185
 # ╟─9f1d4678-d25e-4b07-81d3-7db7049a83c2
 # ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
 # ╟─a21f7183-a8ec-4641-893e-a150d7ad7ea3
+# ╟─d65139ac-0e8c-4c57-979d-8762bae8a299
 # ╠═43df897b-9714-4896-a811-957050636c1d
 # ╠═58aeff9b-e8cb-4e29-82d1-49a5b96963f4
+# ╟─f3c7b4fc-4711-4984-bc57-041b0ae4ba74
+# ╠═c52f5a4b-e6af-482f-8ac7-6980c656bb78
 # ╠═2cd1500d-c91d-4a6c-9390-9f3723b637f7
+# ╟─00a0ff76-b5c6-4340-a146-af6bfd7cc68b
+# ╠═649c5cf6-ac7f-4393-b198-3edbee5bbf59
+# ╟─baf1a165-b56c-4562-b846-112e672fab66
+# ╠═ca74b449-c7ac-4db6-aa1f-2ca8284c752c
+# ╠═4dc0a3c0-8a36-46ce-bde7-3cf9475ffc06
 # ╠═12e37b21-5bf0-4feb-86b0-81b4734e09a8
 # ╠═64eaa0b1-362a-431b-91a8-c037124c9e9b
 # ╠═39ce14f7-c495-4d75-be11-93ccef40c773
+# ╟─492c00e5-6d83-4da5-bb6c-4d3af1669f37
 # ╠═1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
 # ╠═beb08440-6ca8-4232-bc88-4eb0bd796603
 # ╟─00000000-0000-0000-0000-000000000001
