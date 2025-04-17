@@ -201,9 +201,9 @@ Signal-to-Noise: $(@bind sn CheckBox(;default=true))
 begin    
     # Build the formula string
     parameters = String[]
-    for sym in [:z_hetdex, :gmag, :Av, :flux, :sn, :continuum, :apcor, :sigma, :wave]
-        if eval(sym)
-            push!(parameters, String(sym))
+    for (col,sym) in [[:z_hetdex,z_hetdex], [:gmag, gmag], [:Av, Av], [:flux, flux], [:sn, sn], [:continuum, continuum], [:apcor, apcor], [:sigma, sigma], [:wave,wave]]
+        if sym
+            push!(parameters, String(col))
         end
     end
     
@@ -3922,7 +3922,7 @@ version = "1.4.1+2"
 # ╠═60a700c3-354f-4948-be92-2eda822618b4
 # ╟─cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 # ╟─06078401-9a5a-41bf-a971-060466db94fe
-# ╟─a59b1973-145d-4ff6-9ccb-52fff65abd9b
+# ╠═a59b1973-145d-4ff6-9ccb-52fff65abd9b
 # ╠═b2af9b62-0ef5-452b-9907-acf402514906
 # ╟─30c918e8-29e2-4cd3-9cfb-180f90024449
 # ╟─db456dab-1e63-4378-9c0d-1e98bcc022f0
