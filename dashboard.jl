@@ -282,7 +282,7 @@ Slide to adjust x domain:
 md"""
 Slide to adjust y range: 
     Min: $(@bind y_min2 Slider(0:0.1:30; default=0, show_value=true)) 
-    Max: $(@bind y_max2 Slider(0:0.1:30; default=28, show_value=true))
+    Max: $(@bind y_max2 Slider(0:0.1:30; default=5, show_value=true))
 """
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
@@ -745,40 +745,35 @@ elseif Bi
 end
 
 # ╔═╡ 492c00e5-6d83-4da5-bb6c-4d3af1669f37
-md" ### Visualization"
+md" ### Visualization
+
+#### Scatter Plot"
 
 # ╔═╡ 1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
 """
-Create two scatter plots side by side
+Helper to compute axis limits based on feature ranges.
 """
-function plot_scatter(df, predictions, feature_x, feature_y, axes)
-    # Set up plot area
-    plt = plot(layout=(1, 2), size=(1000, 450))
-    
+function get_axis_limits(df, feature_x, feature_y, axes)
     if !isempty(axes)
-        x_min = axes[1]
-        x_max = axes[2]
-        y_min = axes[3]
-        y_max = axes[4]
+        return axes[1], axes[2], axes[3], axes[4]
     else
-        x_min, x_max = minimum(df[!, feature_x]) - 0.1, maximum(df[!, feature_x]) + 		0.1
-        y_min, y_max = minimum(df[!, feature_y]) - 0.1, maximum(df[!, feature_y]) + 		0.1
+        x_min = minimum(df[!, feature_x]) - 0.1
+        x_max = maximum(df[!, feature_x]) + 0.1
+        y_min = minimum(df[!, feature_y]) - 0.1
+        y_max = maximum(df[!, feature_y]) + 0.1
+        return x_min, x_max, y_min, y_max
     end
-	
-    # Get incorrect classifications
-    incorrect_idx = findall(predictions .!= df.source_type)
-    
-    # Create class-specific datasets
-    classes = unique(df.source_type)
-    class_colors = [:blue, :green, :purple]
-    
-    # LEFT PLOT - Actual classes
+end
+
+# ╔═╡ 1a85f137-78e4-4dc2-9dd5-352bf2246a08
+"""
+Plot scatter points by class (true labels) on the specified subplot.
+"""
+function plot_true_classes!(plt, subplot_index, df, feature_x, feature_y, classes, class_colors)
     for (i, class) in enumerate(classes)
         class_idx = findall(df.source_type .== class)
-        
-        # Create a simple scatter for each class
         scatter!(
-            plt[1],
+            plt[subplot_index],
             df[class_idx, feature_x],
             df[class_idx, feature_y],
             color=class_colors[i],
@@ -787,14 +782,18 @@ function plot_scatter(df, predictions, feature_x, feature_y, axes)
             alpha=0.6
         )
     end
-    title!(plt[1], "True Classes: $(String(feature_x)) vs $(String(feature_y))")
-    xlabel!(plt[1], String(feature_x))  # Convert Symbol to String
-    ylabel!(plt[1], String(feature_y))  # Convert Symbol to String
-    
-    # RIGHT PLOT - Predictions & errors
-    # First, plot all points in light gray
+    title!(plt[subplot_index], "True Classes: $(String(feature_x)) vs $(String(feature_y))")
+end
+
+# ╔═╡ 7dba6134-a6a7-401e-8573-5b02e19e852b
+"""
+Plot all points and highlight misclassified ones on the specified subplot.
+"""
+function plot_misclassifications!(plt, subplot_index, df, predictions, feature_x, feature_y)
+    incorrect_idx = findall(predictions .!= df.source_type)
+
     scatter!(
-        plt[2],
+        plt[subplot_index],
         df[!, feature_x],
         df[!, feature_y],
         color=:lightgray,
@@ -802,11 +801,10 @@ function plot_scatter(df, predictions, feature_x, feature_y, axes)
         alpha=0.3,
         label=nothing
     )
-    
-    # Then highlight misclassifications in red
-    if length(incorrect_idx) > 0
+
+    if !isempty(incorrect_idx)
         scatter!(
-            plt[2],
+            plt[subplot_index],
             df[incorrect_idx, feature_x],
             df[incorrect_idx, feature_y],
             color=:red,
@@ -816,16 +814,31 @@ function plot_scatter(df, predictions, feature_x, feature_y, axes)
             label="Misclassified"
         )
     end
-    title!(plt[2], "Misclassifications: $(String(feature_x)) vs $(String(feature_y))")
-    xlabel!(plt[2], String(feature_x))  # Convert Symbol to String
-    ylabel!(plt[2], String(feature_y))  # Convert Symbol to String
-    
-    # Ensure both plots have the same axis limits
-    xlims!(plt[1], x_min, x_max)
-    ylims!(plt[1], y_min, y_max)
-    xlims!(plt[2], x_min, x_max)
-    ylims!(plt[2], y_min, y_max)
-    
+    title!(plt[subplot_index], "Misclassifications: $(String(feature_x)) vs $(String(feature_y))")
+end
+
+# ╔═╡ 8736b3c5-13f1-4fc3-9f9f-e064595afc17
+"""
+Main function to plot side-by-side scatter plots of true labels and misclassifications.
+"""
+function plot_scatter(df, predictions, feature_x, feature_y, axes)
+    plt = plot(layout=(1, 2), size=(1000, 450))
+
+    x_min, x_max, y_min, y_max = get_axis_limits(df, feature_x, feature_y, axes)
+    classes = unique(df.source_type)
+    class_colors = [:blue, :green, :purple]  # Adjust if needed for >3 classes
+
+    plot_true_classes!(plt, 1, df, feature_x, feature_y, classes, class_colors)
+    xlabel!(plt[1], String(feature_x))
+    ylabel!(plt[1], String(feature_y))
+
+    plot_misclassifications!(plt, 2, df, predictions, feature_x, feature_y)
+    xlabel!(plt[2], String(feature_x))
+    ylabel!(plt[2], String(feature_y))
+
+    xlims!(plt[1], x_min, x_max); xlims!(plt[2], x_min, x_max)
+    ylims!(plt[1], y_min, y_max); ylims!(plt[2], y_min, y_max)
+
     return plt
 end
 
@@ -838,127 +851,124 @@ begin
 	plot_scatter(filtered_df_new_per, predictions, row_type2, col_type2, [x_min1,x_max1,y_min1,y_max1])
 end
 
-# ╔═╡ beb08440-6ca8-4232-bc88-4eb0bd796603
+# ╔═╡ ae2e3e69-e2b5-4dcb-8f49-7977c2c05110
+md" #### Heatmap"
+
+# ╔═╡ b28aeedc-c588-4319-a535-3906d13bbd26
 """
-Create two heatmap plots side by side
+Calculate a 3D density matrix for each class in the dataframe.
 """
-function plot_heat(df, predictions, feature_x, feature_y, axes, bins=20)
-    # Set up plot area
+function get_density_matrix(df, feature_x, feature_y, classes, x_min, x_max, y_min, y_max, bins)
+    density_matrix = zeros(bins, bins, length(classes))
+
+    for (i, class) in enumerate(classes)
+        class_idx = findall(df.source_type .== class)
+        class_df = df[class_idx, :]
+
+        for j in 1:length(class_idx)
+            x_val = class_df[j, feature_x]
+            y_val = class_df[j, feature_y]
+
+            if x_val < x_min || x_val > x_max || y_val < y_min || y_val > y_max
+                continue
+            end
+
+            x_bin = x_val == x_max ? bins : Int(floor((x_val - x_min) / (x_max - x_min) * bins)) + 1
+            y_bin = y_val == y_max ? bins : Int(floor((y_val - y_min) / (y_max - y_min) * bins)) + 1
+
+            density_matrix[x_bin, y_bin, i] += 1
+        end
+    end
+
+    return density_matrix
+end
+
+# ╔═╡ e9150269-15e4-434f-866f-8adac9aeeafb
+
+"""
+Draw a heatmap plot in-place on the provided subplot.
+"""
+function build_heatmap_plot!(plt, subplot_index, matrix, x_edges, y_edges, title_str, color_scheme)
+    max_density = maximum(matrix)
+    max_temp = 0.1 * max_density
+
+    heatmap!(
+        plt[subplot_index],
+        x_edges[1:end-1],
+        y_edges[1:end-1],
+        matrix';
+        color=color_scheme,
+        colorbar=true,
+        clim=(0, max_temp)
+    )
+    title!(plt[subplot_index], title_str)
+end
+
+# ╔═╡ 1d4bfc4f-2dfd-4078-8fb4-28f31c7a3af9
+
+"""
+Main function to plot both class density and misclassification heatmaps.
+"""
+function plot_heat(df, predictions, feature_x, feature_y, axes, bins=100)
     plt = plot(layout=(1, 2), size=(1000, 450))
-    
+
     if !isempty(axes)
-        x_min = axes[1]
-        x_max = axes[2]
-        y_min = axes[3]
-        y_max = axes[4]
+        x_min, x_max = axes[1], axes[2]
+        y_min, y_max = axes[3], axes[4]
     else
         x_min, x_max = minimum(df[!, feature_x]) - 0.1, maximum(df[!, feature_x]) + 0.1
         y_min, y_max = minimum(df[!, feature_y]) - 0.1, maximum(df[!, feature_y]) + 0.1
     end
-    
-    # Get incorrect classifications
-    incorrect_idx = findall(predictions .!= df.source_type)
-    
-    # Create class-specific datasets
-    classes = unique(df.source_type)
-    
-    # Define the edges for binning
+
     x_edges = range(x_min, x_max, length=bins+1)
     y_edges = range(y_min, y_max, length=bins+1)
-    
-    # Initialize density matrix for each class
-    density_matrix = zeros(bins, bins, length(classes))
-    
-    # Fill density matrix for each class
-    for (i, class) in enumerate(classes)
-        class_idx = findall(df.source_type .== class)
-        class_df = df[class_idx, :]
-        
-        # Create histogram counts
-        for j in 1:length(class_idx)
-            x_val = class_df[j, feature_x]
-            y_val = class_df[j, feature_y]
-            
-            # Skip points outside the specified range
-            if x_val < x_min || x_val > x_max || y_val < y_min || y_val > y_max
-                continue
-            end
-            
-            # Find bin indices - handle edge case for max value
-            x_bin = x_val == x_max ? bins : Int(floor((x_val - x_min) / (x_max - x_min) * bins)) + 1
-            y_bin = y_val == y_max ? bins : Int(floor((y_val - y_min) / (y_max - y_min) * bins)) + 1
-            
-            # Increment count in that bin
-            density_matrix[x_bin, y_bin, i] += 1
-        end
-    end
-    
-    # Combine classes with different colors for visualization
+
+    classes = unique(df.source_type)
+    density_matrix = get_density_matrix(df, feature_x, feature_y, classes, x_min, x_max, y_min, y_max, bins)
+
+    # Combine class layers into one for visualization
     heatmap_data = zeros(bins, bins)
     for i in 1:length(classes)
-        # Use different multipliers for different classes to create distinct colors
         heatmap_data .+= density_matrix[:, :, i] .* i
     end
-    
-    # Create heatmap
-    heatmap!(
-        plt[1],
-        x_edges[1:end-1],
-        y_edges[1:end-1],
-        heatmap_data',
-        color=:viridis,
-        colorbar=true
-    )
-    title!(plt[1], "Class Density: $(String(feature_x)) vs $(String(feature_y))")
+    build_heatmap_plot!(plt, 1, heatmap_data, x_edges, y_edges,
+                        "Class Density: $(String(feature_x)) vs $(String(feature_y))", :viridis)
     xlabel!(plt[1], String(feature_x))
     ylabel!(plt[1], String(feature_y))
-    
-    # RIGHT PLOT - Misclassification heatmap
-    # Initialize misclassification density matrix
+
+    # Misclassification heatmap
+    incorrect_idx = findall(predictions .!= df.source_type)
     misclass_matrix = zeros(bins, bins)
-    
-    # Count misclassifications in each bin
+
     for idx in incorrect_idx
         x_val = df[idx, feature_x]
         y_val = df[idx, feature_y]
-        
-        # Skip points outside the specified range
+
         if x_val < x_min || x_val > x_max || y_val < y_min || y_val > y_max
             continue
         end
-        
-        # Find bin indices - handle edge case for max value
+
         x_bin = x_val == x_max ? bins : Int(floor((x_val - x_min) / (x_max - x_min) * bins)) + 1
         y_bin = y_val == y_max ? bins : Int(floor((y_val - y_min) / (y_max - y_min) * bins)) + 1
-        
-        # Increment count in that bin
+
         misclass_matrix[x_bin, y_bin] += 1
     end
-    
-    # Create heatmap of misclassifications
-    heatmap!(
-        plt[2],
-        x_edges[1:end-1],
-        y_edges[1:end-1],
-        misclass_matrix',
-        color=:reds,
-        colorbar=true
-    )
-    title!(plt[2], "Misclassifications: $(String(feature_x)) vs $(String(feature_y))")
+
+    build_heatmap_plot!(plt, 2, misclass_matrix, x_edges, y_edges,
+                        "Misclassifications: $(String(feature_x)) vs $(String(feature_y))", :reds)
     xlabel!(plt[2], String(feature_x))
     ylabel!(plt[2], String(feature_y))
-    
-    # Ensure both plots have the same axis limits
-    xlims!(plt[1], x_min, x_max)
-    ylims!(plt[1], y_min, y_max)
-    xlims!(plt[2], x_min, x_max)
-    ylims!(plt[2], y_min, y_max)
-    
+
+    # Match axes
+    xlims!(plt[1], x_min, x_max); xlims!(plt[2], x_min, x_max)
+    ylims!(plt[1], y_min, y_max); ylims!(plt[2], y_min, y_max)
+
     return plt
 end
 
+
 # ╔═╡ fa59defd-6da1-47ee-974c-68cee481e032
-plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2,y_min2,y_max2], 100)
+plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2,y_min2,y_max2], 200)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -3958,6 +3968,12 @@ version = "1.4.1+2"
 # ╠═39ce14f7-c495-4d75-be11-93ccef40c773
 # ╟─492c00e5-6d83-4da5-bb6c-4d3af1669f37
 # ╠═1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
-# ╠═beb08440-6ca8-4232-bc88-4eb0bd796603
+# ╠═1a85f137-78e4-4dc2-9dd5-352bf2246a08
+# ╠═7dba6134-a6a7-401e-8573-5b02e19e852b
+# ╠═8736b3c5-13f1-4fc3-9f9f-e064595afc17
+# ╟─ae2e3e69-e2b5-4dcb-8f49-7977c2c05110
+# ╠═b28aeedc-c588-4319-a535-3906d13bbd26
+# ╠═e9150269-15e4-434f-866f-8adac9aeeafb
+# ╠═1d4bfc4f-2dfd-4078-8fb4-28f31c7a3af9
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
