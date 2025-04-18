@@ -16,18 +16,10 @@ macro bind(def, element)
     #! format: on
 end
 
-# ╔═╡ 2433a18f-d562-48f1-b151-ea33d1303fd7
-begin
-	using Pkg
-	Pkg.status("Flux")
-end
-
 # ╔═╡ f7c78de3-35d8-47e0-9645-f3292c064b01
-using Statistics, Downloads, CSV, DataFrames, HTTP, PyCall, Plots, Flux, DataFrames, StatsBase
-
-# ╔═╡ eef14cac-4a8d-46a3-b8f3-4fc672701d53
 begin
-	using Flux: onehotbatch, onecold, crossentropy
+	using Statistics, Downloads, CSV, DataFrames, HTTP, PyCall, Plots, Flux, DataFrames, StatsBase 
+	using Flux: onehotbatch, onecold, crossentropy, throttle
 	using LinearAlgebra
 end
 
@@ -38,6 +30,7 @@ begin
 	using MLUtils                     # For splitting training and test data
 	using ColorSchemes, LaTeXStrings # For sprucing up figures
 	using PlutoUI, PlutoLinks      # For interactive elemnents and @ingredients
+	using PrettyTables
 	
 	Random.seed!(42)                     
 end;
@@ -291,273 +284,387 @@ end
 # ╔═╡ 60a700c3-354f-4948-be92-2eda822618b4
 println("Filtered dataset size: ", size(filtered_df_new_per))
 
-# ╔═╡ a1381bc7-ecca-4617-87c6-8b0ead0940e6
-function classify_hetdex_objects(df)
-    #Prep
-    println("Preparing data...")
-    
-    #4 features
-    features = [:RA, :DEC, :z_hetdex, :continuum]
-    X = Matrix{Float64}(df[:, features])
-    
-    #give it labels to learn from
-	# Extract and clean labels
-	y_raw = df.source_type
-	y = strip.(lowercase.(String.(y_raw)))  # ensure all are lowercase and stripped
+# ╔═╡ cbf7e0d8-54cc-4dc2-aff0-32fd0c688f7f
+md"""
+## Neural Network
+"""
 
-    unique_classes = sort(unique(y))
-	println(unique_classes)
-    class_to_idx = Dict(class => i for (i, class) in enumerate(unique_classes))
-    y_idx = [class_to_idx[class] for class in y]
-    
-    y_onehot = onehotbatch(y_idx, 1:length(unique_classes))
-    
-    # Normalize features for better training
-    function normalize(X)
+# ╔═╡ 853858a7-1338-4ad8-84ee-a23f1d8f5507
+md"""
+#### train_ hetdex _models (dfs; ...)
+Master function that trains a separate classifier for each source type. This calls  train_ one _ vs _rest(...) and stores the trained model, accuracy, and test set. This is where we get the dictionary of trained models.
+"""
+
+# ╔═╡ 9117c2a2-cabd-4d48-97c9-f0e31c077f1c
+md"""
+#### selected_features()
+Returns a handpicked list of columns (features) from the HETDEX data used for model training.
+"""
+
+# ╔═╡ be9129b2-446c-4f66-974d-c7d69784f8ad
+# Choose features from combined DataFrame
+function selected_features()
+        return [
+            :RA, :DEC, :z_hetdex, :z_hetdex_conf, :Av, :gmag,
+            :flux, :flux_err, :sn, :chi2, :continuum, :continuum_err
+        ]
+end
+
+# ╔═╡ b7ccf55a-f014-4bfd-83ea-339b555b57f0
+# ╠═╡ disabled = true
+#=╠═╡
+# Preprocess and join both data sources
+	function preprocess_hetdex(dfs::Dict)
+	    df_main = dfs["hetdex_sc1_v3.2.ecsv"]
+	    df_det = dfs["hetdex_sc1_detinfo_v3.2.ecsv"]
+	
+	    # Use only the most confident detection per source_id
+	    df_det_unique = combine(groupby(df_det, :source_id)) do sub
+	        sort(sub, :z_hetdex_conf, rev=true)[1, :]
+	    end
+	
+	    # Join by source_id
+	    df = innerjoin(df_main, df_det_unique, on=:source_id, makeunique=true)
+	
+	    # Drop missing
+	    dropmissing!(df)
+	    return df
+	end
+  ╠═╡ =#
+
+# ╔═╡ 83671dde-2ff4-4e18-b483-1c512f5405c9
+md"""
+#### train _ one _ vs _ rest (df, label; ...)
+Trains a binary classifier to distinguish one label vs all others. It first normalizes features for stability and then does a 80% - 20% split. I used a small 3-layer neural network and it uses ReLU and a final sigmoid layer for a binary output.
+"""
+
+# ╔═╡ fc26ab77-ff58-474b-b619-c0041827d2ed
+md"""
+#### normalize_features()
+Returns a handpicked list of columns (features) from the HETDEX data used for model training.
+"""
+
+# ╔═╡ c9ff11cf-c610-478d-853d-ae92e563d0df
+function normalize_features(X)
         X_norm = similar(X)
         for j in 1:size(X, 2)
             μ = mean(X[:, j])
-            σ = std(X[:, j])
-            X_norm[:, j] = (X[:, j] .- μ) ./ (σ + eps())
+            σ = std(X[:, j]) + eps()
+            X_norm[:, j] = (X[:, j] .- μ) ./ σ
         end
         return X_norm
-    end
-    
-    X_norm = normalize(X)
-    
-    # Step 2: Split data into training and testing sets (80/20)
-    n = size(X_norm, 1)
-    idx = shuffle(1:n)
-    train_idx = idx[1:Int(floor(0.8*n))]
-    test_idx = idx[Int(floor(0.8*n))+1:end]
-    
-    # Transpose for Flux (Flux expects features in rows, samples in columns)
-    X_train = Matrix{Float64}(X_norm[train_idx, :]')
-    y_train = y_onehot[:, train_idx]
-    X_test = Matrix{Float64}(X_norm[test_idx, :]')
-    y_test = y_onehot[:, test_idx]
-    
-    # Step 3: Build a simple model
-    println("Building and training model...")
-    input_size = size(X_train, 1)  # Number of features
-    output_size = length(unique_classes)  # Number of classes
-    
-    # Simple model with just one hidden layer
-    model = Chain(
-        Dense(input_size, 32, relu),  # Single hidden layer with 32 neurons
-        Dense(32, output_size),       # Output layer
-        softmax                       # Convert to probabilities
-    )
-    
-    # Define loss function - modified to take model as first parameter for latest Flux API
-    function loss_fn(m, x, y)
-        return crossentropy(m(x), y)
-    end
-    
-    # Step 4: Train the model
-    # Create batches manually instead of using DataLoader
-    function create_batches(X, y, batch_size, shuffle_data=true)
-        n = size(X, 2)  # Number of samples
+end
+
+# ╔═╡ a8654671-ec89-483e-b5b6-c301ebad302f
+md"""
+#### create _batches (X, y, batch _size)
+Splits training data into shuffled mini-batches.
+"""
+
+# ╔═╡ ecd34ac7-46d0-41a8-8693-a6408e227567
+function create_batches(X, y, batch_size)
+        n = size(X, 2)
+        indices = shuffle(1:n)
         batches = []
-        
-        # Create indices and optionally shuffle them
-        indices = collect(1:n)
-        if shuffle_data
-            indices = shuffle(indices)
-        end
-        
-        # Create batches
         for i in 1:batch_size:n
             end_idx = min(i + batch_size - 1, n)
-            batch_indices = indices[i:end_idx]
-            push!(batches, (X[:, batch_indices], y[:, batch_indices]))
+            push!(batches, (X[:, indices[i:end_idx]], y[:, indices[i:end_idx]]))
         end
-        
         return batches
-    end
-    
-    # Optimizer
-    opt = ADAM(0.001)
-	opt_state = Flux.setup(opt, model)
-    
-    # For storing metrics
-    train_losses = Float64[]
-    test_losses = Float64[]
-    train_accs = Float64[]
-    test_accs = Float64[]
-    
-    # Calculate accuracy
-    function accuracy(m, x, y)
-        predictions = onecold(m(x))
-        targets = onecold(y)
-        return mean(predictions .== targets)
-    end
-    
-    # Prepare batches
-    batch_size = 64
-    
-    # Train for 20 epochs
-    epochs = 20
-    for epoch in 1:epochs
-        # Create new batches for each epoch (with shuffling)
-        train_batches = create_batches(X_train, y_train, batch_size, true)
-        
-        # Train on batches
-        for (x, y) in train_batches
-            # Use explicit gradient calculation with the latest Flux API
-            gs = gradient(m -> loss_fn(m, x, y), model)
-			Flux.update!(opt_state, model, gs)
-        end
-        
-        # Create batches for evaluation (no shuffling needed)
-        train_eval_batches = create_batches(X_train, y_train, batch_size, false)
-        test_eval_batches = create_batches(X_test, y_test, batch_size, false)
-        
-        # Calculate metrics
-        train_loss = mean([loss_fn(model, x, y) for (x, y) in train_eval_batches])
-        test_loss = mean([loss_fn(model, x, y) for (x, y) in test_eval_batches])
-        
-        train_acc = mean([accuracy(model, x, y) for (x, y) in train_eval_batches])
-        test_acc = mean([accuracy(model, x, y) for (x, y) in test_eval_batches])
-        
-        push!(train_losses, train_loss)
-        push!(test_losses, test_loss)
-        push!(train_accs, train_acc)
-        push!(test_accs, test_acc)
-        
-        # Print progress
-        if epoch % 5 == 0 || epoch == 1 || epoch == epochs
-            println("Epoch $epoch/$epochs:")
-            println("  Train Loss: $(round(train_loss, digits=4)), Accuracy: $(round(100*train_acc, digits=2))%")
-            println("  Test Loss: $(round(test_loss, digits=4)), Accuracy: $(round(100*test_acc, digits=2))%")
-        end
-    end
-    
-    # Step 5: Evaluate the model
-    println("\nEvaluating final model...")
-    
-    # Make predictions on test set
-    test_preds = model(X_test)
-    
-    # Create confusion matrix
-    pred_classes = onecold(test_preds)
-    true_classes = onecold(y_test)
-    
-    conf_matrix = zeros(Int, output_size, output_size)
-    for i in 1:length(pred_classes)
-        if i <= length(true_classes)
-            conf_matrix[true_classes[i], pred_classes[i]] += 1
-        end
-    end
-    
-
-    final_accuracy = sum(diag(conf_matrix)) / sum(conf_matrix)
-    println("Final accuracy: $(round(100*final_accuracy, digits=2))%")
-    
-    println("Creating visualizations...")
-    
-    #plot metric
-    p1 = plot(
-        1:epochs,
-        [train_losses test_losses],
-        label=["Training Loss" "Validation Loss"],
-        title="Loss Over Epochs",
-        xlabel="Epoch",
-        ylabel="Loss",
-        lw=2
-    )
-    
-    p2 = plot(
-        1:epochs,
-        [train_accs test_accs] .* 100,
-        label=["Training Accuracy" "Validation Accuracy"],
-        title="Accuracy Over Epochs",
-        xlabel="Epoch",
-        ylabel="Accuracy (%)",
-        lw=2,
-        ylims=(0, 100)
-    )
-    
-    p3 = heatmap(
-        1:output_size, 1:output_size, conf_matrix',
-        c=:viridis,
-        xticks=(1:output_size, unique_classes),
-        yticks=(1:output_size, unique_classes),
-        xrotation=45,
-        xlabel="True Label",
-        ylabel="Predicted Label",
-        title="Confusion Matrix",
-        guidefontsize=10,
-        tickfontsize=8
-    )
-    
-    # Add text annotations to confusion matrix
-    for i in 1:output_size, j in 1:output_size
-        annotate!(p3, j, i, text(string(conf_matrix[i, j]), :white, :center, 8))
-    end
-    
-    # Combine plots
-    final_plot = plot(p1, p2, p3, layout=(3, 1), size=(700, 900))
-    display(final_plot)
-    
-    return Dict(
-        "model" => model,
-        "classes" => unique_classes,
-        "accuracy" => final_accuracy,
-        "confusion_matrix" => conf_matrix,
-        "plots" => final_plot
-    )
 end
 
-
-# ╔═╡ 26b45206-006e-4663-aa73-f9180fac44be
-function predict_hetdex_objects(model, new_data, classes, feature_columns=[:RA, :DEC, :z_hetdex, :continuum])
-    # Extract features
-    X = Matrix{Float64}(new_data[:, feature_columns])
-    
-    # Normalize features (same as in training)
-    X_norm = similar(X)
-    for j in 1:size(X, 2)
-        μ = mean(X[:, j])
-        σ = std(X[:, j])
-        X_norm[:, j] = (X[:, j] .- μ) ./ (σ + eps())
-    end
-    
-    # Transpose for Flux (columns are samples)
-    X_norm_t = Matrix{Float64}(X_norm')
-    
-    # Get predictions
-    preds = model(X_norm_t)
-    pred_indices = onecold(preds)
-    
-    # Convert indices back to class labels
-    pred_labels = [classes[idx] for idx in pred_indices]
-    
-    # Create DataFrame with predictions
-    results_df = DataFrame(
-        predicted_class = pred_labels,
-        confidence = [maximum(preds[:, i]) for i in 1:size(preds, 2)]
-    )
-	println("Prediction labels:")
-	println(pred_labels)
-    
-    return results_df
-end
-
-# ╔═╡ 9868e1a5-79d4-4cd0-bdaf-104ed1f15282
+# ╔═╡ 9cf66c4e-5bb1-485f-b789-3f4329e5032b
 begin
-	results = classify_hetdex_objects(filtered_df_new_per)
+	# Train a binary classifier (one-vs-rest)
+	function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rate)
+	    X = Matrix{Float64}(df[:, features])
+	    y_raw = strip.(lowercase.(String.(df.source_type)))
+	    y_binary = [label == yi ? 1.0 : 0.0 for yi in y_raw]
+	    # Normalize
+	    X_norm = normalize_features(X)
+	    # Split train/test
+	    n = size(X_norm, 1)
+	    idx = shuffle(1:n)
+	    train_idx = idx[1:Int(floor(0.8 * n))]
+	    test_idx = idx[Int(floor(0.8 * n)) + 1:end]
+	    X_train = X_norm[train_idx, :]'
+	    y_train = reshape(y_binary[train_idx], 1, :)
+	    X_test  = X_norm[test_idx, :]'
+	    y_test  = reshape(y_binary[test_idx], 1, :)
+	    # Model
+	    input_dim = size(X_train, 1)
+	    model = Chain(
+	        Dense(input_dim, 64, relu),
+	        Dense(64, 32, relu),
+	        Dense(32, 1),
+	        sigmoid
+	    )
+	    function safe_bce(pred, target)
+	        # Clip predictions to avoid exact 0 or 1
+	        pred_safe = clamp.(pred, 1e-7, 1 - 1e-7)
+	        return Flux.binarycrossentropy(pred_safe, target)
+	    end
+	    loss_fn(x, y) = Flux.Losses.mse(model(x), y)
+	    opt = ADAM(learning_rate)
+	    state = Flux.setup(opt, model)
+	    train_losses = Float64[]
+	    test_losses = Float64[]
+	    # Track previous loss for fallback
+	    prev_train_loss = nothing
+	    prev_test_loss = nothing
 	
-	#Uncomment once the lin works the trained model
-	model = results["model"]
-	classes = results["classes"]
-	# Use some of the test data as "new" input
-	new_data = filtered_df_new_per[1:5, :]
+	    for epoch in 1:epochs
+	        for (x_batch, y_batch) in create_batches(X_train, y_train, batch_size)
+	            loss, back = Flux.withgradient(model -> loss_fn(x_batch, y_batch), model)
+	            batch_losses = Float64[]
+	            # Skip update if gradient contains NaN
+	            if any(isnan, Flux.params(back))
+	                @warn "NaN gradient detected, skipping batch"
+	                continue
+	            end
 	
-	predictions = predict_hetdex_objects(model, new_data, classes)
-	println("Classes:")
-	println(classes)
+	            state, model = Optimisers.update!(state, model, back)
+	            push!(batch_losses, loss)
+	        end
+	        # Calculate and record epoch losses with safeguards
+	        train_loss = loss_fn(X_train, y_train)
+	        if isnan(train_loss) || isinf(train_loss)
+	            @warn "NaN/Inf detected in training loss, using fallback value"
+	            train_loss = prev_train_loss !== nothing ? prev_train_loss : 10.0
+	        end
+	        push!(train_losses, train_loss)
+	        prev_train_loss = train_loss
+			
+	        test_loss = loss_fn(X_test, y_test)
+	        if isnan(test_loss) || isinf(test_loss)
+	            @warn "NaN/Inf detected in test loss, using fallback value"
+	            test_loss = prev_test_loss !== nothing ? prev_test_loss : 10.0
+	        end
+	        push!(test_losses, test_loss)
+	        prev_test_loss = test_loss
+			sample_preds = model(X_train[:, 1:10])
+			sample_labels = y_train[:, 1:10]
+	        # Print progress
+	        if epoch % 5 == 0 || epoch == 1
+	            println("Epoch $epoch: Train loss = $train_loss, Test loss = $test_loss")
+	        end
+	    end
+	
+	    # Evaluate accuracy
+	    preds = clamp.(model(X_test), 1e-7, 1-1e-7) .> 0.4
+	    acc = mean(preds .== (y_test .> 0.5))
+	    return model, acc, (train_losses, test_losses), (X_test=X_test, y_test=y_test)
+	end
+	
+		
 end
+
+# ╔═╡ b47c25c2-319e-4374-97c0-723a38a9a861
+begin
+	# Main entry point
+	function train_hetdex_models(dfs::Dict; epochs=20, batch_size=64, learning_rate=0.001)
+	    println("--- Processing and training for HETDEX ---")
+	    df = filtered_df
+	    # Train one-vs-rest models for each class
+	    labels = sort(unique(strip.(lowercase.(String.(df.source_type)))))
+	    models = Dict()
+	    metrics = Dict()
+	    testsets = Dict()
+	    train_losslog = Dict()
+	    test_losslog = Dict()
+	    for label in labels
+	        println("\nTraining model for class: $label vs rest")
+	        model, acc, (train_losses, test_losses), test_data = train_one_vs_rest(df, label; 
+	            features=selected_features(),
+	            epochs=epochs, batch_size=batch_size, learning_rate=learning_rate)
+	        models[label] = model
+	        metrics[label] = acc
+	        testsets[label] = test_data
+	        train_losslog[label] = train_losses
+	        test_losslog[label] = test_losses
+	    end
+	    println("\nPer-class accuracy:")
+	    for (label, acc) in metrics
+	        println("$(rpad(label, 10)) : $(round(acc * 100, digits=2))%")
+	    end
+	    return models, metrics, testsets, train_losslog, test_losslog
+	end
+	
+end
+
+# ╔═╡ 51e99b48-8918-49bf-a34f-3ecf54bfe402
+md"""
+## Model Run
+Final run using all data.
+"""
+
+# ╔═╡ f7b5f8db-abbb-46f0-93cc-f7b6fe4fa882
+# ╠═╡ show_logs = false
+models, metrics, testsets, train_losslog, test_losslog = train_hetdex_models(dfs; epochs=5, batch_size=128, learning_rate=0.001)
+
+# ╔═╡ 151afba1-ee99-4b00-9e81-77ab74cb12d9
+md"""
+## Final Output Statistics
+Choose which objects you'd like to see the accuracy or truth ratio for.
+"""
+
+# ╔═╡ 60615be0-8b9b-473a-b112-437f3e122cda
+md"""
+Lyman Alpha Emitters: $(@bind show_lae2 CheckBox(;default=true))
+
+Low Redshift Galaxies: $(@bind show_lzg2 CheckBox(;default=true))
+
+Active Galactic Nuclei: $(@bind show_agn2 CheckBox(;default=true))
+"""
+
+# ╔═╡ 34c6340d-ad54-4ba5-a9ae-05d8cb7d2f67
+begin
+	visible_labels = String[]
+	
+	if show_lae2
+	    push!(visible_labels, "lae")
+	end
+	if show_lzg2
+	    push!(visible_labels, "lzg")
+	end
+	if show_agn2
+	    push!(visible_labels, "agn")
+	end
+end
+
+# ╔═╡ 74ccc93e-32fe-4ebe-b50a-17660d614766
+begin
+    summary_table = DataFrame(Label=String[], Total=Int[], Correct=Int[], Percent_Accuracy=Float64[])
+
+    for label in keys(models)
+        if !(label in visible_labels)
+            continue
+        end
+
+        acc = metrics[label]
+        test = testsets[label]
+        y_test = test.y_test
+        truth = y_test .> 0.5
+        total = count(truth)
+        correct = round(Int, acc * total)
+
+        push!(summary_table, (label, total, correct, round(acc * 100, digits=2)))
+    end
+
+    summary_table
+end
+
+
+# ╔═╡ 829fc7d7-236f-436f-8b67-c7703ca49de7
+begin
+	p = plot(title="Loss vs Epoch for All Labels", xlabel="Epoch", ylabel="Loss")
+	
+	for label in keys(train_losslog)
+	    train_loss = train_losslog[label]
+	    test_loss = test_losslog[label]
+	
+	    plot!(
+	        1:length(train_loss), train_loss;
+	        label="Train $label", lw=2
+	    )
+	    plot!(
+	        1:length(test_loss), test_loss;
+	        label="Test $label", lw=2, linestyle=:dash
+	    )
+	end
+	
+	p  # Return the plot object so Pluto shows it
+	
+end
+
+# ╔═╡ 45319e71-1025-4a2d-87f9-d00fc57ad157
+combine(groupby(filtered_df, :source_type), nrow => :count)
+
+
+
+# ╔═╡ b22ae74e-a0c9-4a41-8742-15cddaf072b3
+begin
+	println("Available columns:")
+	foreach(col -> println(" - ", col), names(filtered_df))
+	
+end
+
+# ╔═╡ 40628976-654e-472c-9600-884123507e93
+function debug_train_model(df, label; features)
+    X = Matrix{Float64}(df[:, features])
+    y_raw = strip.(lowercase.(String.(df.source_type)))
+    y_binary = [label == yi ? 1.0 : 0.0 for yi in y_raw]
+    
+    # Check original data
+    println("Original data check for '$label':")
+    has_nan_X = any(isnan, X)
+    has_inf_X = any(isinf, X)
+    println("  X has NaN: $has_nan_X, has Inf: $has_inf_X")
+    
+    # Check normalization
+    X_norm = normalize_features(X)
+    has_nan_X_norm = any(isnan, X_norm)
+    has_inf_X_norm = any(isinf, X_norm)
+    println("  X_norm has NaN: $has_nan_X_norm, has Inf: $has_inf_X_norm")
+    
+    # Check data splitting
+    n = size(X_norm, 1)
+    idx = shuffle(1:n)
+    train_idx = idx[1:Int(floor(0.8 * n))]
+    test_idx = idx[Int(floor(0.8 * n)) + 1:end]
+    X_train = X_norm[train_idx, :]'
+    y_train = reshape(y_binary[train_idx], 1, :)
+    
+    # Check model initialization
+    input_dim = size(X_train, 1)
+    println("  Input dimension: $input_dim")
+    
+    # Create a minimal test model
+    model = Chain(
+        Dense(input_dim, 1),
+        sigmoid
+    )
+    
+    # Test forward pass
+    output = model(X_train)
+    has_nan_output = any(isnan, output)
+    println("  Initial forward pass has NaN: $has_nan_output")
+    
+    # Test loss calculation
+    bce = Flux.binarycrossentropy(clamp.(output, 1e-7, 1-1e-7), y_train)
+    println("  Initial BCE loss: $bce (isNaN: $(isnan(bce)))")
+    
+    # Test gradient calculation
+    loss_fn(x, y) = Flux.binarycrossentropy(clamp.(model(x), 1e-7, 1-1e-7), y)
+    loss, back = Flux.withgradient(model -> loss_fn(X_train, y_train), model)
+    
+    has_nan_grad = any(g -> any(isnan, g), Flux.params(back))
+    println("  Gradient has NaN: $has_nan_grad")
+    
+    return (
+        data_has_nan = has_nan_X || has_nan_X_norm,
+        output_has_nan = has_nan_output,
+        loss_is_nan = isnan(bce),
+        grad_has_nan = has_nan_grad
+    )
+end
+
+# ╔═╡ a4c677e6-a621-45d9-a334-34d8df29fa4c
+function diagnose_all_classes(df; features)
+    labels = sort(unique(strip.(lowercase.(String.(df.source_type)))))
+    results = Dict()
+    
+    for label in labels
+        println("\n=== Testing label: $label ===")
+        results[label] = debug_train_model(df, label; features=features)
+        println("Summary for $label: ", results[label])
+    end
+    
+    return results
+end
+
+# ╔═╡ 027d9b3c-2307-4535-97ce-cf5a86669f34
+diagnose_results = diagnose_all_classes(filtered_df; features=selected_features())
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
@@ -580,10 +687,10 @@ HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MLUtils = "f1d291b0-491e-4a28-83b9-f70985020b54"
-Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoLinks = "0ff47ea0-7a50-410d-8455-4348d5de0420"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+PrettyTables = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
 PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
@@ -600,9 +707,10 @@ MLUtils = "~0.4.7"
 Plots = "~1.40.11"
 PlutoLinks = "~0.1.6"
 PlutoUI = "~0.7.61"
+PrettyTables = "~2.4.0"
 PyCall = "~1.96.4"
 Statistics = "~1.11.1"
-StatsBase = "~0.33.21"
+StatsBase = "~0.34.4"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -611,7 +719,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.2"
 manifest_format = "2.0"
-project_hash = "d6c8353688c38dea31586a363b7b7b91c71b8bf1"
+project_hash = "2c5bc3333500b5c48a6995131854ee72c5b65e3e"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -664,6 +772,12 @@ weakdeps = ["SparseArrays", "StaticArrays"]
     [deps.Adapt.extensions]
     AdaptSparseArraysExt = "SparseArrays"
     AdaptStaticArraysExt = "StaticArrays"
+
+[[deps.AliasTables]]
+deps = ["PtrArrays", "Random"]
+git-tree-sha1 = "9876e1e164b144ca45e9e3198d0b689cadfed9ff"
+uuid = "66dad0bd-aa9a-41b7-9441-69ab47430ed8"
+version = "1.1.3"
 
 [[deps.ArgCheck]]
 git-tree-sha1 = "f9e9a66c9b7be1ad7372bbd9b062d9230c30c5ce"
@@ -1825,6 +1939,11 @@ git-tree-sha1 = "80d919dee55b9c50e8d9e2da5eeafff3fe58b539"
 uuid = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 version = "0.1.4"
 
+[[deps.PtrArrays]]
+git-tree-sha1 = "1d36ef11a9aaf1e8b74dacc6a731dd1de8fd493d"
+uuid = "43287f4e-b6f4-7ad1-bb20-aadabca52c3d"
+version = "1.3.0"
+
 [[deps.PyCall]]
 deps = ["Conda", "Dates", "Libdl", "LinearAlgebra", "MacroTools", "Serialization", "VersionParsing"]
 git-tree-sha1 = "9816a3826b0ebf49ab4926e2b18842ad8b5c8f04"
@@ -2040,10 +2159,10 @@ uuid = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
 version = "1.7.0"
 
 [[deps.StatsBase]]
-deps = ["DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "d1bf48bfcc554a3761a133fe3a9bb01488e06916"
+deps = ["AliasTables", "DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
+git-tree-sha1 = "29321314c920c26684834965ec2ce0dacc9cf8e5"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.33.21"
+version = "0.34.4"
 
 [[deps.StringManipulation]]
 deps = ["PrecompileTools"]
@@ -2539,22 +2658,41 @@ version = "1.4.1+2"
 # ╠═01bde1a6-0424-4214-b1b0-0fc5f535e628
 # ╠═08c58fe0-05cb-4261-b439-125e23bef928
 # ╠═b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
-# ╟─4ffdd47c-2f29-4807-a0d6-816f547e9f36
+# ╠═4ffdd47c-2f29-4807-a0d6-816f547e9f36
 # ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
 # ╠═cc1605fc-210b-4d15-b3a9-9115716a647b
 # ╠═156347d1-4d07-4745-90c8-1287d2179a79
-# ╠═7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
+# ╟─7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
 # ╟─7b40310a-5555-4567-937e-5002563f547d
 # ╟─8686dc59-679b-42ee-b6dd-0f94c61740fd
 # ╠═b98c713d-2fa5-4da2-8756-b9296dea6474
-# ╠═97605a73-dafd-4740-ae33-999dfa7fd7bd
+# ╟─97605a73-dafd-4740-ae33-999dfa7fd7bd
 # ╠═1bb82599-45c3-4cf1-a80f-054933cc2515
 # ╠═60a700c3-354f-4948-be92-2eda822618b4
-# ╠═eef14cac-4a8d-46a3-b8f3-4fc672701d53
-# ╠═a1381bc7-ecca-4617-87c6-8b0ead0940e6
-# ╠═26b45206-006e-4663-aa73-f9180fac44be
-# ╠═9868e1a5-79d4-4cd0-bdaf-104ed1f15282
-# ╠═2433a18f-d562-48f1-b151-ea33d1303fd7
+# ╟─cbf7e0d8-54cc-4dc2-aff0-32fd0c688f7f
+# ╟─853858a7-1338-4ad8-84ee-a23f1d8f5507
+# ╠═b47c25c2-319e-4374-97c0-723a38a9a861
+# ╟─9117c2a2-cabd-4d48-97c9-f0e31c077f1c
+# ╠═be9129b2-446c-4f66-974d-c7d69784f8ad
+# ╟─b7ccf55a-f014-4bfd-83ea-339b555b57f0
+# ╟─83671dde-2ff4-4e18-b483-1c512f5405c9
+# ╠═9cf66c4e-5bb1-485f-b789-3f4329e5032b
+# ╟─fc26ab77-ff58-474b-b619-c0041827d2ed
+# ╠═c9ff11cf-c610-478d-853d-ae92e563d0df
+# ╟─a8654671-ec89-483e-b5b6-c301ebad302f
+# ╠═ecd34ac7-46d0-41a8-8693-a6408e227567
+# ╟─51e99b48-8918-49bf-a34f-3ecf54bfe402
+# ╠═f7b5f8db-abbb-46f0-93cc-f7b6fe4fa882
+# ╟─151afba1-ee99-4b00-9e81-77ab74cb12d9
+# ╟─60615be0-8b9b-473a-b112-437f3e122cda
+# ╟─34c6340d-ad54-4ba5-a9ae-05d8cb7d2f67
+# ╟─74ccc93e-32fe-4ebe-b50a-17660d614766
+# ╠═829fc7d7-236f-436f-8b67-c7703ca49de7
+# ╠═45319e71-1025-4a2d-87f9-d00fc57ad157
+# ╠═b22ae74e-a0c9-4a41-8742-15cddaf072b3
+# ╠═40628976-654e-472c-9600-884123507e93
+# ╠═a4c677e6-a621-45d9-a334-34d8df29fa4c
+# ╠═027d9b3c-2307-4535-97ce-cf5a86669f34
 # ╠═a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
