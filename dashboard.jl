@@ -285,6 +285,9 @@ Slide to adjust y range:
     Max: $(@bind y_max2 Slider(0:0.1:30; default=5, show_value=true))
 """
 
+# ╔═╡ 5ac62a72-03c2-4b48-952b-8b52367b2d56
+md" # Neural Network - Classification "
+
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
 # Setup
@@ -360,7 +363,7 @@ function ecsv_to_dataframe(file_name)
 end
 
 
-# ╔═╡ 01bde1a6-0424-4214-b1b0-0fc5f535e628
+# ╔═╡ eb3774d1-ffe4-43c1-9afb-435377936505
 
 """
 Process HETDEX files - downloading and converting to dataframe
@@ -687,7 +690,7 @@ end
 """
 Check model predictions against true classes
 """
-function evaluate_model(df, predictions)
+function evaluate_lr_model(df, predictions)
     actual = df.source_type
     correct = sum(predictions .== actual)
     accuracy = correct / length(actual)
@@ -718,7 +721,7 @@ function tri_pred()
 	predictions = predict_all_sources(filtered_df_new_per, fit_lae, fit_lzg, fit_agn)
 	    
 	# Evaluate the model
-	results = evaluate_model(filtered_df_new_per, predictions)
+	results = evaluate_lr_model(filtered_df_new_per, predictions)
 	    
 	# Print results
 	println("Model Accuracy: $(round(results["accuracy"] * 100, digits=2))%")
@@ -743,6 +746,122 @@ elseif Bi
 	predictions, conf_df = binary_predict()
 	conf_df
 end
+
+# ╔═╡ 9299a4d3-bb71-4d2d-8fa2-59b4d65bcda6
+md" ### Running the Neural Network"
+
+# ╔═╡ ce3219c3-6dbb-44a3-90c1-7e321369e107
+"""
+Convert categorical labels to numerical indices
+"""
+function encode_labels(labels)
+	    classes = unique(labels)
+	    return [findfirst(==(label), classes) for label in labels], classes
+end
+
+# ╔═╡ 36d3fcf2-de53-499c-82e3-ad86770b4965
+"""
+Load and preprocess data
+"""
+function preprocess_data(df)
+	# Select only numerical columns
+	numeric_df = select(df, filter(c -> eltype(df[!, c]) <: Number, names(df)))
+	
+	features = Matrix(numeric_df)  # Convert to matrix
+	labels, classes = encode_labels(df.source_type)     # Convert source_type to numbers
+	labels = Flux.onehotbatch(labels, 1:length(classes)) # One-hot encode labels
+	
+	# Normalize features
+	features = (features .- mean(features, dims=2)) ./ std(features, dims=2)
+	
+	return features, labels, classes
+end
+
+# ╔═╡ bc8348c5-ffed-4bc2-b487-05835082943e
+"""
+Split data into training and testing sets
+"""
+function split_data(features, labels, train_ratio=0.8)
+	n = size(features, 2)
+	idx = randperm(n)
+	train_size = Int(round(train_ratio * n))
+	    
+	train_idx, test_idx = idx[1:train_size], idx[train_size+1:end]
+	
+	return features[:, train_idx], labels[:, train_idx], features[:, test_idx], labels[:, test_idx]
+end
+
+# ╔═╡ d75d657a-7e07-41a1-8df9-abaeecf0576c
+"""
+Define the neural network model
+"""
+function build_model(input_size, output_size)
+	return Chain(
+	    Dense(input_size, 32, relu),
+	    Dense(32, 16, relu),
+	    Dense(16, output_size),
+	    softmax
+    )
+end
+
+# ╔═╡ 333d45f6-e38c-4077-830a-a29daca772f1
+"""
+Train the model
+"""
+function train_model(model, x_train, y_train, epochs=50, lr=0.01)
+	loss_fn = Flux.crossentropy
+    opt = Adam(lr)
+	losses = []
+	
+	for epoch in 1:epochs
+        loss, grads = Flux.withgradient(m -> loss_fn(m(x_train), y_train), model)
+	    Flux.update!(opt, model, grads)
+	
+	    push!(losses, loss)
+	    println("Epoch $epoch: Loss = $loss")
+	end
+	
+	return losses
+end
+
+# ╔═╡ 4a6c7529-58a0-4930-be9b-fb5970b63f6e
+"""
+Evaluate model performance
+"""
+function evaluate_model(model, x_test, y_test, classes)
+	y_pred = model(x_test)
+	y_pred_labels = Flux.onecold(y_pred, 1:length(classes))
+	y_true_labels = Flux.onecold(y_test, 1:length(classes))
+	
+	accuracy = sum(y_pred_labels .== y_true_labels) / length(y_true_labels)
+	println("Test Accuracy: ", accuracy)
+	
+	# Scatter plot for visualization
+	scatter(x_test[1, :], x_test[2, :], group=y_pred_labels, title="Neural Network Classification", legend=:topright)
+end
+
+# ╔═╡ ed9be429-e2d3-4c56-899c-179f584cb3f9
+"""
+Main execution
+"""
+function main(df)
+	features, labels, classes = preprocess_data(df)
+    x_train, y_train, x_test, y_test = split_data(features, labels)
+	
+	model = build_model(size(x_train, 1), size(y_train, 1))
+	
+	println("Training the model...")
+	losses = train_model(model, x_train, y_train)
+	
+	println("Evaluating the model...")
+	evaluate_model(model, x_test, y_test, classes)
+	
+	# Plot training loss
+    plot(1:length(losses), losses, xlabel="Epochs", ylabel="Loss", title="Training Loss", lw=2)
+end
+
+# ╔═╡ 54f5a2d1-0624-4379-9aa4-03a90f7fed8e
+main(filtered_df_new_per)
 
 # ╔═╡ 492c00e5-6d83-4da5-bb6c-4d3af1669f37
 md" ### Visualization
@@ -3911,13 +4030,12 @@ version = "1.4.1+2"
 # ╟─7992ba99-db91-45b1-bcdd-4be7c273417f
 # ╠═7fcdc2bb-cc2d-4601-9327-69a9794e1faa
 # ╟─f9cde89e-4ec9-4076-baa9-a2189a976ffb
-# ╠═01bde1a6-0424-4214-b1b0-0fc5f535e628
 # ╠═08c58fe0-05cb-4261-b439-125e23bef928
 # ╠═b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
 # ╟─92be734b-4a14-4f51-96d6-bd70664db385
 # ╟─4ffdd47c-2f29-4807-a0d6-816f547e9f36
 # ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
-# ╟─156347d1-4d07-4745-90c8-1287d2179a79
+# ╠═156347d1-4d07-4745-90c8-1287d2179a79
 # ╟─3f822b20-8aec-42c2-bec9-2676ad39f5d2
 # ╟─8cc2e79a-a876-4771-b721-1b00da75f644
 # ╟─c10ffd55-2cc1-4e79-9b70-e515e5baf7ad
@@ -3948,6 +4066,8 @@ version = "1.4.1+2"
 # ╠═fa59defd-6da1-47ee-974c-68cee481e032
 # ╟─d8669fd4-ec53-456f-9be9-f3198a914185
 # ╟─9f1d4678-d25e-4b07-81d3-7db7049a83c2
+# ╟─5ac62a72-03c2-4b48-952b-8b52367b2d56
+# ╠═54f5a2d1-0624-4379-9aa4-03a90f7fed8e
 # ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
@@ -3955,6 +4075,7 @@ version = "1.4.1+2"
 # ╟─d65139ac-0e8c-4c57-979d-8762bae8a299
 # ╠═43df897b-9714-4896-a811-957050636c1d
 # ╠═58aeff9b-e8cb-4e29-82d1-49a5b96963f4
+# ╠═eb3774d1-ffe4-43c1-9afb-435377936505
 # ╟─f3c7b4fc-4711-4984-bc57-041b0ae4ba74
 # ╠═c52f5a4b-e6af-482f-8ac7-6980c656bb78
 # ╠═2cd1500d-c91d-4a6c-9390-9f3723b637f7
@@ -3966,6 +4087,14 @@ version = "1.4.1+2"
 # ╠═12e37b21-5bf0-4feb-86b0-81b4734e09a8
 # ╠═64eaa0b1-362a-431b-91a8-c037124c9e9b
 # ╠═39ce14f7-c495-4d75-be11-93ccef40c773
+# ╟─9299a4d3-bb71-4d2d-8fa2-59b4d65bcda6
+# ╠═ce3219c3-6dbb-44a3-90c1-7e321369e107
+# ╠═36d3fcf2-de53-499c-82e3-ad86770b4965
+# ╠═bc8348c5-ffed-4bc2-b487-05835082943e
+# ╠═d75d657a-7e07-41a1-8df9-abaeecf0576c
+# ╠═333d45f6-e38c-4077-830a-a29daca772f1
+# ╠═4a6c7529-58a0-4930-be9b-fb5970b63f6e
+# ╠═ed9be429-e2d3-4c56-899c-179f584cb3f9
 # ╟─492c00e5-6d83-4da5-bb6c-4d3af1669f37
 # ╠═1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
 # ╠═1a85f137-78e4-4dc2-9dd5-352bf2246a08
