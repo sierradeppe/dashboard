@@ -31,6 +31,9 @@ begin
 	using GLM
 	using KernelDensity
 	using Colors, ColorSchemes	
+	using Flux: onehotbatch, onecold, crossentropy, throttle
+	using Optimisers
+	using LinearAlgebra
 	Random.seed!(42)                     
 end;
 
@@ -286,7 +289,108 @@ Slide to adjust y range:
 """
 
 # ╔═╡ 5ac62a72-03c2-4b48-952b-8b52367b2d56
-md" # Neural Network - Classification "
+md"""
+\
+
+## Multilayer Perceptron - Classification
+In Astronomy, classification between more than two objects is usually done with MLPs. This is a good problem for an MLP since the data is tabular, there is no requirement for spatial structure and it is easy to build in Flux. It is also fast and flexible which is good for a project that required a lot of re-working. I used a one-vs-rest scheme.This trains one binary classifier per class, where each classifier learns to distinguish that class from all others. During prediction, all classifiers are run, and the class with the highest confidence score is selected as the final label.
+"""
+
+# ╔═╡ 9e84a02f-69b4-47b2-8336-fdab1e8a58d0
+md"""
+Lyman Alpha Emitters: $(@bind show_lae2 CheckBox(;default=true))
+
+Low Redshift Galaxies: $(@bind show_lzg2 CheckBox(;default=true))
+
+Active Galactic Nuclei: $(@bind show_agn2 CheckBox(;default=true))
+"""
+
+# ╔═╡ 7c2bb9a7-4d6a-410f-b477-70f5cd379caa
+md"The prediction is worse for the lzg and agn due to how unbalanced this dataset is. We can fix this by either making the dataset more balanced by removing some objects or by adding weights."
+
+# ╔═╡ 2846656f-5a69-44db-a49d-8b86e4f272c3
+begin
+	begin
+	    md"""
+	    ### Weight Settings
+	    
+	    Use Weighting: $(@bind use_weight CheckBox(default=false))
+	    
+	    Select Weight Amount: $(@bind weight_amt Select([1.0, 2.0, 3.0, 4.0]))
+	    """
+	end
+	begin
+	    md"""
+	    ### Weight Settings
+	    
+	    Use Weighting: $(@bind use_weight CheckBox(default=false))
+	    
+	    Select Weight Amount: $(@bind weight_amt Select([1.0, 2.0, 3.0, 4.0]))
+	    """
+	end
+	
+end
+
+# ╔═╡ 6c110916-d3cc-4d2a-b704-e2cfd50e5f65
+md"""
+\
+
+## Visualization
+See the true vs misclassified objects below in two formats. Adjust the x and y sliders to zoom in as much as desired.
+"""
+
+# ╔═╡ 98a97d21-e2cf-4b5a-9010-19b6a6ce67f5
+md"""
+Lyman Alpha Emitters: $(@bind show_lae3 CheckBox(;default=true))  
+Low Redshift Galaxies: $(@bind show_lzg3 CheckBox(;default=true))  
+Active Galactic Nuclei: $(@bind show_agn3 CheckBox(;default=true))  
+"""
+
+# ╔═╡ 15a65ab0-6d6b-4f88-b009-ec4e33203cf6
+begin
+	vis_labels = String[]
+	
+	if show_lae3
+	    push!(vis_labels, "lae")
+	end
+	if show_lzg3
+	    push!(vis_labels, "lzg")
+	end
+	if show_agn3
+	    push!(vis_labels, "agn")
+	end
+	vis_labels
+end
+
+# ╔═╡ 9b0bfddb-47ce-4686-81f7-22aadb3a7d92
+begin
+	visible_labels = String[]
+	
+	if show_lae2
+	    push!(visible_labels, "lae")
+	end
+	if show_lzg2
+	    push!(visible_labels, "lzg")
+	end
+	if show_agn2
+	    push!(visible_labels, "agn")
+	end
+	vis_labels
+end
+
+# ╔═╡ ce3014ce-f173-4b6d-93f2-a61bf78cd71d
+md"""
+X Axis Range:  
+Min: $(@bind x_min_vis Slider(x_range[1]:1:x_range[2]; default=x_range[1], show_value=true))  
+Max: $(@bind x_max_vis Slider(x_range[1]:1:x_range[2]; default=x_range[2], show_value=true))
+"""
+
+# ╔═╡ 393854ca-2f40-43f0-8827-59e75e33a2db
+md"""
+Y Axis Range:  
+Min: $(@bind y_min_vis Slider(y_range[1]:0.1:y_range[2]; default=y_range[1], show_value=true))  
+Max: $(@bind y_max_vis Slider(y_range[1]:0.1:y_range[2]; default=y_range[2], show_value=true))
+"""
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
@@ -747,121 +851,318 @@ elseif Bi
 	conf_df
 end
 
-# ╔═╡ 9299a4d3-bb71-4d2d-8fa2-59b4d65bcda6
-md" ### Running the Neural Network"
+# ╔═╡ d45b8d13-2bc9-4f1d-8bf2-85e37350cec6
+md" ### Training and Testing Neural Network"
 
-# ╔═╡ ce3219c3-6dbb-44a3-90c1-7e321369e107
+
+# ╔═╡ 4c755b09-d3eb-4840-85b5-71892bf58da3
+md"""
+#### train_ hetdex _models (dfs; ...)
+Master function that trains a separate classifier for each source type. This calls  train_ one _ vs _rest(...) and stores the trained model, accuracy, and test set. This is where we get the dictionary of trained models.
 """
-Convert categorical labels to numerical indices
+
+# ╔═╡ 80009b4d-957d-4921-b928-aaa08c670a81
+md"""
+#### selected_features()
+Returns a handpicked list of columns (features) from the HETDEX data used for model training.
 """
-function encode_labels(labels)
-	    classes = unique(labels)
-	    return [findfirst(==(label), classes) for label in labels], classes
+
+# ╔═╡ 71113ed5-c3a2-4cc3-89e1-d1a3dd5ab344
+# Choose features from combined DataFrame
+function selected_features()
+        return [
+            :continuum, :gmag, :sigma, :flux, :sn, :Av, :wave, :z_hetdex, :apcor
+        ]
 end
 
-# ╔═╡ 36d3fcf2-de53-499c-82e3-ad86770b4965
+# ╔═╡ 2af6c817-d15a-4e94-9e72-551678da050a
+md"""
+X-Axis: $(@bind row_vis Select(selected_features()))
+Y-Axis: $(@bind col_vis Select(selected_features()))
 """
-Load and preprocess data
-"""
-function preprocess_data(df)
-	# Select only numerical columns
-	numeric_df = select(df, filter(c -> eltype(df[!, c]) <: Number, names(df)))
-	
-	features = Matrix(numeric_df)  # Convert to matrix
-	labels, classes = encode_labels(df.source_type)     # Convert source_type to numbers
-	labels = Flux.onehotbatch(labels, 1:length(classes)) # One-hot encode labels
-	
-	# Normalize features
-	features = (features .- mean(features, dims=2)) ./ std(features, dims=2)
-	
-	return features, labels, classes
+
+# ╔═╡ a2990273-66f9-411a-91ad-7df278971b13
+function plot_misclassified_scatter(X, y_true, y_pred;
+    x_feature::Symbol,
+    y_feature::Symbol,
+    xlims::Tuple,
+    ylims::Tuple,
+    labels::Vector{String}=["lae", "lzg", "agn"]
+)
+    if isempty(labels)
+        return plot(title="No classes selected", xlabel="", ylabel="")
+    end
+
+    feature_list = selected_features()
+    f1 = findfirst(==(x_feature), feature_list)
+    f2 = findfirst(==(y_feature), feature_list)
+
+    if isnothing(f1) || isnothing(f2)
+        return plot(title="Invalid features selected", xlabel="", ylabel="")
+    end
+
+    x = X[f1, :]
+    y = X[f2, :]
+
+    correct_mask = (y_pred .> 0.4) .== (y_true .> 0.5)
+    misclass_mask = .!correct_mask
+
+    scatter(x[correct_mask], y[correct_mask],
+        label="Correct",
+        xlabel=String(x_feature),
+        ylabel=String(y_feature),
+        xlim=xlims,
+        ylim=ylims,
+        markershape=:circle,
+        alpha=0.8,
+        markerstrokecolor=:transparent,
+        title="Correct vs Misclassified: $(join(labels, ", "))")
+
+    scatter!(x[misclass_mask], y[misclass_mask],
+        label="Misclassified",
+        markershape=:circle,
+        alpha=0.8,
+        markerstrokecolor=:transparent)
 end
 
-# ╔═╡ bc8348c5-ffed-4bc2-b487-05835082943e
+# ╔═╡ de4cc03d-35b1-46ce-b73f-1ac690033e07
+md"""
+#### train _ one _ vs _ rest (df, label; ...)
+Trains a binary classifier to distinguish one label vs all others. It first normalizes features for stability and then does a 80% - 20% split. I used a small 3-layer neural network and it uses ReLU and a final sigmoid layer for a binary output.
 """
-Split data into training and testing sets
+
+# ╔═╡ e3081c77-7076-4364-afb3-a5f542f75fb7
+md"""
+#### normalize_features()
+Returns a handpicked list of columns (features) from the HETDEX data used for model training.
 """
-function split_data(features, labels, train_ratio=0.8)
-	n = size(features, 2)
-	idx = randperm(n)
-	train_size = Int(round(train_ratio * n))
-	    
-	train_idx, test_idx = idx[1:train_size], idx[train_size+1:end]
-	
-	return features[:, train_idx], labels[:, train_idx], features[:, test_idx], labels[:, test_idx]
+
+# ╔═╡ d8a47390-083d-4eea-b62d-a72b2ca0defe
+function normalize_features(X)
+        X_norm = similar(X)
+        for j in 1:size(X, 2)
+            μ = mean(X[:, j])
+            σ = std(X[:, j]) + eps()
+            X_norm[:, j] = (X[:, j] .- μ) ./ σ
+        end
+        return X_norm
 end
 
-# ╔═╡ d75d657a-7e07-41a1-8df9-abaeecf0576c
+# ╔═╡ a98db5bb-a571-423d-9561-f619a2e4822f
+md"""
+#### create _batches (X, y, batch _size)
+Splits training data into shuffled mini-batches.
 """
-Define the neural network model
-"""
-function build_model(input_size, output_size)
-	return Chain(
-	    Dense(input_size, 32, relu),
-	    Dense(32, 16, relu),
-	    Dense(16, output_size),
-	    softmax
-    )
+
+# ╔═╡ 96f7bf4d-38c7-43f9-ac59-b166df283f0b
+function create_batches(X, y, batch_size)
+        n = size(X, 2)
+        indices = shuffle(1:n)
+        batches = []
+        for i in 1:batch_size:n
+            end_idx = min(i + batch_size - 1, n)
+            push!(batches, (X[:, indices[i:end_idx]], y[:, indices[i:end_idx]]))
+        end
+        return batches
 end
 
-# ╔═╡ 333d45f6-e38c-4077-830a-a29daca772f1
-"""
-Train the model
-"""
-function train_model(model, x_train, y_train, epochs=50, lr=0.01)
-	loss_fn = Flux.crossentropy
-    opt = Adam(lr)
-	losses = []
+# ╔═╡ e7beecb7-727a-4a4b-b956-671c4e04ac4d
+begin
+	# Train a binary classifier (one-vs-rest)
+	function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rate, choose_weight= false , weight= 1.0)
+	    X = Matrix{Float64}(df[:, features])
+	    y_raw = strip.(lowercase.(String.(df.source_type)))
+	    y_binary = [label == yi ? 1.0 : 0.0 for yi in y_raw]
+	    # Normalize
+	    X_norm = normalize_features(X)
+	    # Split train/test
+	    n = size(X_norm, 1)
+	    idx = shuffle(1:n)
+	    train_idx = idx[1:Int(floor(0.8 * n))]
+	    test_idx = idx[Int(floor(0.8 * n)) + 1:end]
+	    X_train = X_norm[train_idx, :]'
+	    y_train = reshape(y_binary[train_idx], 1, :)
+	    X_test  = X_norm[test_idx, :]'
+	    y_test  = reshape(y_binary[test_idx], 1, :)
+	    # Model
+	    input_dim = size(X_train, 1)
+	    model = Chain(
+	        Dense(input_dim, 64, relu),
+	        Dense(64, 32, relu),
+	        Dense(32, 1),
+	        sigmoid
+	    )
+	    function safe_bce(pred, target)
+	        # Clip predictions to avoid exact 0 or 1
+	        pred_safe = clamp.(pred, 1e-7, 1 - 1e-7)
+	        return Flux.binarycrossentropy(pred_safe, target)
+		end	
+		function weighted_bce(pred, target; weight)
+		    pred_safe = clamp.(pred, 1e-7, 1 - 1e-7)
+		    return -mean(weight .* target .* log.(pred_safe) .+ (1 .- target) .* log.(1 .- pred_safe))
+		end
+
+		function class_weight(label, df; alpha=1.2)
+		    total = nrow(df)
+		    label_count = sum(strip.(lowercase.(String.(df.source_type))) .== label)
+		    freq = label_count / total
+		    return (1 / freq)^alpha
+		end
+		
+
+		weight_used = choose_weight ? class_weight(label, df) : 1.0
+
+		loss_fn(x, y) = choose_weight ?
+		    weighted_bce(model(x), y; weight=weight_used) :
+		    safe_bce(model(x), y)
+
+		
+	    opt = ADAM(learning_rate)
+	    state = Flux.setup(opt, model)
+	    train_losses = Float64[]
+	    test_losses = Float64[]
+	    # Track previous loss for fallback
+	    prev_train_loss = nothing
+	    prev_test_loss = nothing
 	
-	for epoch in 1:epochs
-        loss, grads = Flux.withgradient(m -> loss_fn(m(x_train), y_train), model)
-	    Flux.update!(opt, model, grads)
+	    for epoch in 1:epochs
+	        for (x_batch, y_batch) in create_batches(X_train, y_train, batch_size)
+	            loss, back = Flux.withgradient(model -> loss_fn(x_batch, y_batch), model)
+	            batch_losses = Float64[]
+	            # Skip update if gradient contains NaN
+	            if any(isnan, Flux.params(back))
+	                @warn "NaN gradient detected, skipping batch"
+	                continue
+	            end
 	
-	    push!(losses, loss)
-	    println("Epoch $epoch: Loss = $loss")
+	            state, model = Optimisers.update!(state, model, back)
+	            push!(batch_losses, loss)
+	        end
+	        # Calculate and record epoch losses with safeguards
+	        train_loss = loss_fn(X_train, y_train)
+	        if isnan(train_loss) || isinf(train_loss)
+	            @warn "NaN/Inf detected in training loss, using fallback value"
+	            train_loss = prev_train_loss !== nothing ? prev_train_loss : 10.0
+	        end
+	        push!(train_losses, train_loss)
+	        prev_train_loss = train_loss
+			
+	        test_loss = loss_fn(X_test, y_test)
+	        if isnan(test_loss) || isinf(test_loss)
+	            @warn "NaN/Inf detected in test loss, using fallback value"
+	            test_loss = prev_test_loss !== nothing ? prev_test_loss : 10.0
+	        end
+	        push!(test_losses, test_loss)
+	        prev_test_loss = test_loss
+			sample_preds = model(X_train[:, 1:10])
+			sample_labels = y_train[:, 1:10]
+	        # Print progress
+	        if epoch % 5 == 0 || epoch == 1
+	            println("Epoch $epoch: Train loss = $train_loss, Test loss = $test_loss")
+	        end
+	    end
+	
+	    # Evaluate accuracy
+	    preds = clamp.(model(X_test), 1e-7, 1-1e-7) .> 0.4
+	    acc = mean(preds .== (y_test .> 0.5))
+		println("Using weight = $(round(weight_used, digits=2)) for label = $label (weighted = $choose_weight)")
+
+	    return model, acc, (train_losses, test_losses), (X_test=X_test, y_test=y_test)
+	end
+		
+end
+
+# ╔═╡ 3ec317d6-d920-41a7-987e-e84b767571de
+begin
+	# Main entry point
+	function train_hetdex_models(dfs::Dict; epochs=20, batch_size=64, learning_rate=0.001, choose_weight= false , weight= 1.0)
+	    println("--- Processing and training for HETDEX ---")
+	    df = dfs[:filtered]
+	    # Train one-vs-rest models for each class
+	    labels = sort(unique(strip.(lowercase.(String.(df.source_type)))))
+	    models = Dict()
+	    metrics = Dict()
+	    testsets = Dict()
+	    train_losslog = Dict()
+	    test_losslog = Dict()
+	    for label in labels
+	        println("\nTraining model for class: $label vs rest")
+	        model, acc, (train_losses, test_losses), test_data = train_one_vs_rest(df, label; 
+	            features=selected_features(),
+	            epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, 				choose_weight= false , weight= 1.0)
+	        models[label] = model
+	        metrics[label] = acc
+	        testsets[label] = test_data
+	        train_losslog[label] = train_losses
+	        test_losslog[label] = test_losses
+	    end
+	    println("\nPer-class accuracy:")
+	    for (label, acc) in metrics
+	        println("$(rpad(label, 10)) : $(round(acc * 100, digits=2))%")
+	    end
+	    return models, metrics, testsets, train_losslog, test_losslog
 	end
 	
-	return losses
-end
-
-# ╔═╡ 4a6c7529-58a0-4930-be9b-fb5970b63f6e
-"""
-Evaluate model performance
-"""
-function evaluate_model(model, x_test, y_test, classes)
-	y_pred = model(x_test)
-	y_pred_labels = Flux.onecold(y_pred, 1:length(classes))
-	y_true_labels = Flux.onecold(y_test, 1:length(classes))
-	
-	accuracy = sum(y_pred_labels .== y_true_labels) / length(y_true_labels)
-	println("Test Accuracy: ", accuracy)
-	
-	# Scatter plot for visualization
-	scatter(x_test[1, :], x_test[2, :], group=y_pred_labels, title="Neural Network Classification", legend=:topright)
-end
-
-# ╔═╡ ed9be429-e2d3-4c56-899c-179f584cb3f9
-"""
-Main execution
-"""
-function main(df)
-	features, labels, classes = preprocess_data(df)
-    x_train, y_train, x_test, y_test = split_data(features, labels)
-	
-	model = build_model(size(x_train, 1), size(y_train, 1))
-	
-	println("Training the model...")
-	losses = train_model(model, x_train, y_train)
-	
-	println("Evaluating the model...")
-	evaluate_model(model, x_test, y_test, classes)
-	
-	# Plot training loss
-    plot(1:length(losses), losses, xlabel="Epochs", ylabel="Loss", title="Training Loss", lw=2)
 end
 
 # ╔═╡ 54f5a2d1-0624-4379-9aa4-03a90f7fed8e
-main(filtered_df_new_per)
+# ╠═╡ show_logs = false
+models, metrics, testsets, train_losslog, test_losslog = train_hetdex_models(Dict(:filtered => filtered_df_new_per), choose_weight= use_weight , weight= weight_amt)
+
+
+# ╔═╡ bc8fef1b-f7b0-4a10-8bf6-f323f1e85558
+begin
+    summary_table = DataFrame(Label=String[], Total=Int[], Correct=Int[], Percent_Accuracy=Float64[])
+
+    for label in keys(models)
+        if !(label in visible_labels)
+            continue
+        end
+
+        acc = metrics[label]
+        test = testsets[label]
+        y_test = test.y_test
+        truth = y_test .> 0.5
+        total = count(truth)
+        correct = round(Int, acc * total)
+
+        push!(summary_table, (label, total, correct, round(acc * 100, digits=2)))
+    end
+
+    summary_table
+end
+
+# ╔═╡ 19d41fab-75b9-4656-b8fc-4ad2ada7204c
+# ╠═╡ show_logs = false
+begin
+    num_features = size(testsets[first(keys(testsets))][:X_test], 1)
+    all_X = Array{Float64}(undef, num_features, 0)
+    all_y_true = Float64[]
+    all_y_pred = Float64[]
+
+    for label in vis_labels
+        model = models[label]
+        X_test = testsets[label][:X_test]
+        y_test = testsets[label][:y_test]
+        preds = model(X_test)
+
+        all_X = hcat(all_X, X_test)
+        append!(all_y_true, vec(y_test))
+        append!(all_y_pred, vec(preds))
+    end
+
+    (all_X, all_y_true, all_y_pred)
+end
+
+# ╔═╡ 94f81aa9-79a9-468d-9d33-9af313ced54a
+plot_misclassified_scatter(
+    all_X, all_y_true, all_y_pred;
+    x_feature=row_vis,
+    y_feature=col_vis,
+    xlims=(x_min_vis, x_max_vis),
+    ylims=(y_min_vis, y_max_vis),
+    labels=vis_labels
+)
 
 # ╔═╡ 492c00e5-6d83-4da5-bb6c-4d3af1669f37
 md" ### Visualization
@@ -1089,6 +1390,90 @@ end
 # ╔═╡ fa59defd-6da1-47ee-974c-68cee481e032
 plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2,y_min2,y_max2], 200)
 
+# ╔═╡ 906eef4d-a8a5-481f-8f2b-f39a6612e73a
+md" #### MLP Visualization"
+
+# ╔═╡ 5884859e-2289-4cd3-8308-6b6093037014
+# ╠═╡ disabled = true
+#=╠═╡
+
+"""
+Main function to plot both class density and misclassification heatmaps.
+"""
+function plot_overall_correct_vs_wrong(X, y_true, y_pred;
+        x_feature::Symbol, y_feature::Symbol,
+        xlims::Tuple, ylims::Tuple
+    )
+
+    correct_mask = (y_pred .> 0.4) .== (y_true .> 0.5)
+    misclass_mask = .!correct_mask
+
+    # Find feature indices
+    feature_list = selected_features()
+    f1 = findfirst(==(x_feature), feature_list)
+	f2 = findfirst(==(y_feature), feature_list)
+
+xlabel = String(x_feature)
+ylabel = String(y_feature)
+
+    x = X[f1, :]
+    y = X[f2, :]
+
+    scatter(x[correct_mask], y[correct_mask],
+        label="Correct",
+        xlabel=x_feature,
+        ylabel=y_feature,
+        xlim=xlims,
+        ylim=ylims,
+        markershape=:circle,
+        alpha=0.8,
+        markerstrokecolor=:transparent,
+        title="Correct vs Misclassified")
+
+    scatter!(x[misclass_mask], y[misclass_mask],
+        label="Misclassified",
+        markershape=:circle,
+        alpha=0.8,
+        markerstrokecolor=:transparent)
+end
+
+  ╠═╡ =#
+
+# ╔═╡ d1ce0c07-6bb9-46a3-873e-2f67034b8147
+#=╠═╡
+begin
+    X, y_true, y_pred = (all_X, all_y_true, all_y_pred)
+
+    plot_overall_correct_vs_wrong(
+        X, y_true, y_pred;
+        x_feature=row_vis,
+        y_feature=col_vis,
+        xlims=(x_min_vis, x_max_vis),
+        ylims=(y_min_vis, y_max_vis)
+    )
+end
+
+  ╠═╡ =#
+
+# ╔═╡ 0b0c9faf-1e64-47f4-a702-0215b67ecc30
+begin
+    X, _, _ = (all_X, all_y_true, all_y_pred)
+    feature_list = selected_features()
+
+    f1 = findfirst(==(row_vis), feature_list)
+    f2 = findfirst(==(col_vis), feature_list)
+
+    if isnothing(f1) || isnothing(f2) || isempty(vis_labels)
+        ((0.0, 1.0), (0.0, 1.0))
+    else
+        x_vals = X[f1, :]
+        y_vals = X[f2, :]
+        x_range = (floor(minimum(x_vals), digits=1), ceil(maximum(x_vals), digits=1))
+        y_range = (floor(minimum(y_vals), digits=1), ceil(maximum(y_vals), digits=1))
+        (x_range, y_range)
+    end
+end
+
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
@@ -1103,9 +1488,11 @@ GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 KernelDensity = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
 MLBase = "f0e99cf1-93fa-52ec-9ecc-5026115318e0"
 MLUtils = "f1d291b0-491e-4a28-83b9-f70985020b54"
+Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoLinks = "0ff47ea0-7a50-410d-8455-4348d5de0420"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
@@ -1130,6 +1517,7 @@ LaTeXStrings = "~1.4.0"
 MCMCChains = "~6.0.7"
 MLBase = "~0.9.2"
 MLUtils = "~0.4.7"
+Optimisers = "~0.3.4"
 Plots = "~1.40.11"
 PlutoLinks = "~0.1.6"
 PlutoUI = "~0.7.61"
@@ -1146,7 +1534,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.2"
 manifest_format = "2.0"
-project_hash = "57a24ba5d48389512c1449393fa12ccd65e1f092"
+project_hash = "d9f21e221537365e2c7d88dca303016922bff98a"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "e2478490447631aedba0823d4d7a80b2cc8cdb32"
@@ -4035,7 +4423,7 @@ version = "1.4.1+2"
 # ╟─92be734b-4a14-4f51-96d6-bd70664db385
 # ╟─4ffdd47c-2f29-4807-a0d6-816f547e9f36
 # ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
-# ╠═156347d1-4d07-4745-90c8-1287d2179a79
+# ╟─156347d1-4d07-4745-90c8-1287d2179a79
 # ╟─3f822b20-8aec-42c2-bec9-2676ad39f5d2
 # ╟─8cc2e79a-a876-4771-b721-1b00da75f644
 # ╟─c10ffd55-2cc1-4e79-9b70-e515e5baf7ad
@@ -4059,50 +4447,71 @@ version = "1.4.1+2"
 # ╠═1d61a378-6f6a-459a-a280-2ca0eea69b5f
 # ╟─4b3932b9-dfdc-4e85-9760-d863cfd8abce
 # ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
-# ╟─d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
-# ╟─bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
-# ╟─05de7c5b-cd38-4cf7-8530-34c22d63ca79
+# ╠═d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
+# ╠═bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
+# ╠═05de7c5b-cd38-4cf7-8530-34c22d63ca79
 # ╟─3d693c6c-3cb6-4172-8356-ba8716d66efc
 # ╠═fa59defd-6da1-47ee-974c-68cee481e032
-# ╟─d8669fd4-ec53-456f-9be9-f3198a914185
-# ╟─9f1d4678-d25e-4b07-81d3-7db7049a83c2
+# ╠═d8669fd4-ec53-456f-9be9-f3198a914185
+# ╠═9f1d4678-d25e-4b07-81d3-7db7049a83c2
 # ╟─5ac62a72-03c2-4b48-952b-8b52367b2d56
 # ╠═54f5a2d1-0624-4379-9aa4-03a90f7fed8e
+# ╟─9e84a02f-69b4-47b2-8336-fdab1e8a58d0
+# ╟─9b0bfddb-47ce-4686-81f7-22aadb3a7d92
+# ╟─bc8fef1b-f7b0-4a10-8bf6-f323f1e85558
+# ╟─7c2bb9a7-4d6a-410f-b477-70f5cd379caa
+# ╟─2846656f-5a69-44db-a49d-8b86e4f272c3
+# ╟─6c110916-d3cc-4d2a-b704-e2cfd50e5f65
+# ╟─98a97d21-e2cf-4b5a-9010-19b6a6ce67f5
+# ╟─2af6c817-d15a-4e94-9e72-551678da050a
+# ╟─15a65ab0-6d6b-4f88-b009-ec4e33203cf6
+# ╠═19d41fab-75b9-4656-b8fc-4ad2ada7204c
+# ╠═0b0c9faf-1e64-47f4-a702-0215b67ecc30
+# ╟─a2990273-66f9-411a-91ad-7df278971b13
+# ╠═94f81aa9-79a9-468d-9d33-9af313ced54a
+# ╟─ce3014ce-f173-4b6d-93f2-a61bf78cd71d
+# ╟─393854ca-2f40-43f0-8827-59e75e33a2db
+# ╠═d1ce0c07-6bb9-46a3-873e-2f67034b8147
 # ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
 # ╟─a21f7183-a8ec-4641-893e-a150d7ad7ea3
 # ╟─d65139ac-0e8c-4c57-979d-8762bae8a299
-# ╠═43df897b-9714-4896-a811-957050636c1d
-# ╠═58aeff9b-e8cb-4e29-82d1-49a5b96963f4
-# ╠═eb3774d1-ffe4-43c1-9afb-435377936505
+# ╟─43df897b-9714-4896-a811-957050636c1d
+# ╟─58aeff9b-e8cb-4e29-82d1-49a5b96963f4
+# ╟─eb3774d1-ffe4-43c1-9afb-435377936505
 # ╟─f3c7b4fc-4711-4984-bc57-041b0ae4ba74
-# ╠═c52f5a4b-e6af-482f-8ac7-6980c656bb78
-# ╠═2cd1500d-c91d-4a6c-9390-9f3723b637f7
+# ╟─c52f5a4b-e6af-482f-8ac7-6980c656bb78
+# ╟─2cd1500d-c91d-4a6c-9390-9f3723b637f7
 # ╟─00a0ff76-b5c6-4340-a146-af6bfd7cc68b
-# ╠═649c5cf6-ac7f-4393-b198-3edbee5bbf59
+# ╟─649c5cf6-ac7f-4393-b198-3edbee5bbf59
 # ╟─baf1a165-b56c-4562-b846-112e672fab66
-# ╠═ca74b449-c7ac-4db6-aa1f-2ca8284c752c
-# ╠═4dc0a3c0-8a36-46ce-bde7-3cf9475ffc06
-# ╠═12e37b21-5bf0-4feb-86b0-81b4734e09a8
-# ╠═64eaa0b1-362a-431b-91a8-c037124c9e9b
-# ╠═39ce14f7-c495-4d75-be11-93ccef40c773
-# ╟─9299a4d3-bb71-4d2d-8fa2-59b4d65bcda6
-# ╠═ce3219c3-6dbb-44a3-90c1-7e321369e107
-# ╠═36d3fcf2-de53-499c-82e3-ad86770b4965
-# ╠═bc8348c5-ffed-4bc2-b487-05835082943e
-# ╠═d75d657a-7e07-41a1-8df9-abaeecf0576c
-# ╠═333d45f6-e38c-4077-830a-a29daca772f1
-# ╠═4a6c7529-58a0-4930-be9b-fb5970b63f6e
-# ╠═ed9be429-e2d3-4c56-899c-179f584cb3f9
+# ╟─ca74b449-c7ac-4db6-aa1f-2ca8284c752c
+# ╟─4dc0a3c0-8a36-46ce-bde7-3cf9475ffc06
+# ╟─12e37b21-5bf0-4feb-86b0-81b4734e09a8
+# ╟─64eaa0b1-362a-431b-91a8-c037124c9e9b
+# ╟─39ce14f7-c495-4d75-be11-93ccef40c773
+# ╟─d45b8d13-2bc9-4f1d-8bf2-85e37350cec6
+# ╟─4c755b09-d3eb-4840-85b5-71892bf58da3
+# ╟─3ec317d6-d920-41a7-987e-e84b767571de
+# ╟─80009b4d-957d-4921-b928-aaa08c670a81
+# ╟─71113ed5-c3a2-4cc3-89e1-d1a3dd5ab344
+# ╟─de4cc03d-35b1-46ce-b73f-1ac690033e07
+# ╟─e7beecb7-727a-4a4b-b956-671c4e04ac4d
+# ╟─e3081c77-7076-4364-afb3-a5f542f75fb7
+# ╟─d8a47390-083d-4eea-b62d-a72b2ca0defe
+# ╟─a98db5bb-a571-423d-9561-f619a2e4822f
+# ╟─96f7bf4d-38c7-43f9-ac59-b166df283f0b
 # ╟─492c00e5-6d83-4da5-bb6c-4d3af1669f37
-# ╠═1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
-# ╠═1a85f137-78e4-4dc2-9dd5-352bf2246a08
-# ╠═7dba6134-a6a7-401e-8573-5b02e19e852b
-# ╠═8736b3c5-13f1-4fc3-9f9f-e064595afc17
-# ╟─ae2e3e69-e2b5-4dcb-8f49-7977c2c05110
-# ╠═b28aeedc-c588-4319-a535-3906d13bbd26
-# ╠═e9150269-15e4-434f-866f-8adac9aeeafb
-# ╠═1d4bfc4f-2dfd-4078-8fb4-28f31c7a3af9
+# ╟─1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
+# ╟─1a85f137-78e4-4dc2-9dd5-352bf2246a08
+# ╟─7dba6134-a6a7-401e-8573-5b02e19e852b
+# ╟─8736b3c5-13f1-4fc3-9f9f-e064595afc17
+# ╠═ae2e3e69-e2b5-4dcb-8f49-7977c2c05110
+# ╟─b28aeedc-c588-4319-a535-3906d13bbd26
+# ╟─e9150269-15e4-434f-866f-8adac9aeeafb
+# ╟─1d4bfc4f-2dfd-4078-8fb4-28f31c7a3af9
+# ╟─906eef4d-a8a5-481f-8f2b-f39a6612e73a
+# ╠═5884859e-2289-4cd3-8308-6b6093037014
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
