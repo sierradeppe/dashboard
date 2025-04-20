@@ -296,6 +296,11 @@ md"""
 In Astronomy, classification between more than two objects is usually done with MLPs. This is a good problem for an MLP since the data is tabular, there is no requirement for spatial structure and it is easy to build in Flux. It is also fast and flexible which is good for a project that required a lot of re-working. I used a one-vs-rest scheme.This trains one binary classifier per class, where each classifier learns to distinguish that class from all others. During prediction, all classifiers are run, and the class with the highest confidence score is selected as the final label.
 """
 
+# ╔═╡ ae3a4684-f2a2-46cd-885d-6e708d7e6ee5
+md"
+Choose which labels you'd like to see the performance for-s
+"
+
 # ╔═╡ 9e84a02f-69b4-47b2-8336-fdab1e8a58d0
 md"""
 Lyman Alpha Emitters: $(@bind show_lae2 CheckBox(;default=true))
@@ -304,6 +309,18 @@ Low Redshift Galaxies: $(@bind show_lzg2 CheckBox(;default=true))
 
 Active Galactic Nuclei: $(@bind show_agn2 CheckBox(;default=true))
 """
+
+# ╔═╡ 6577cfe5-8c62-4c50-b910-05f919f51868
+md"""
+\
+
+## Running the Neural Network
+"""
+
+# ╔═╡ d72d878d-5517-4063-8789-f07a0b02e7b3
+md"
+The table below shows the result of the MLP.
+"
 
 # ╔═╡ 7c2bb9a7-4d6a-410f-b477-70f5cd379caa
 md"The prediction is worse for the lzg and agn due to how unbalanced this dataset is. We can fix this by either making the dataset more balanced by removing some objects or by adding weights."
@@ -336,7 +353,7 @@ md"""
 \
 
 ## Visualization
-See the true vs misclassified objects below in two formats. Adjust the x and y sliders to zoom in as much as desired.
+See the true vs misclassified objects as a scatter plot where you can compare the overlap.
 """
 
 # ╔═╡ 98a97d21-e2cf-4b5a-9010-19b6a6ce67f5
@@ -378,19 +395,10 @@ begin
 	vis_labels
 end
 
-# ╔═╡ ce3014ce-f173-4b6d-93f2-a61bf78cd71d
-md"""
-X Axis Range:  
-Min: $(@bind x_min_vis Slider(x_range[1]:1:x_range[2]; default=x_range[1], show_value=true))  
-Max: $(@bind x_max_vis Slider(x_range[1]:1:x_range[2]; default=x_range[2], show_value=true))
-"""
-
-# ╔═╡ 393854ca-2f40-43f0-8827-59e75e33a2db
-md"""
-Y Axis Range:  
-Min: $(@bind y_min_vis Slider(y_range[1]:0.1:y_range[2]; default=y_range[1], show_value=true))  
-Max: $(@bind y_max_vis Slider(y_range[1]:0.1:y_range[2]; default=y_range[2], show_value=true))
-"""
+# ╔═╡ 01290a3d-0636-46f1-9ad6-dd4eee59c99c
+md"
+Here are two heatmaps. They also alow affected by your selections above. The prediction heatmap shows the confidence around specific areas within the features. The missclassification heatmap can show specific areas where the MLP is struggling.
+"
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 md"""
@@ -881,50 +889,6 @@ X-Axis: $(@bind row_vis Select(selected_features()))
 Y-Axis: $(@bind col_vis Select(selected_features()))
 """
 
-# ╔═╡ a2990273-66f9-411a-91ad-7df278971b13
-function plot_misclassified_scatter(X, y_true, y_pred;
-    x_feature::Symbol,
-    y_feature::Symbol,
-    xlims::Tuple,
-    ylims::Tuple,
-    labels::Vector{String}=["lae", "lzg", "agn"]
-)
-    if isempty(labels)
-        return plot(title="No classes selected", xlabel="", ylabel="")
-    end
-
-    feature_list = selected_features()
-    f1 = findfirst(==(x_feature), feature_list)
-    f2 = findfirst(==(y_feature), feature_list)
-
-    if isnothing(f1) || isnothing(f2)
-        return plot(title="Invalid features selected", xlabel="", ylabel="")
-    end
-
-    x = X[f1, :]
-    y = X[f2, :]
-
-    correct_mask = (y_pred .> 0.4) .== (y_true .> 0.5)
-    misclass_mask = .!correct_mask
-
-    scatter(x[correct_mask], y[correct_mask],
-        label="Correct",
-        xlabel=String(x_feature),
-        ylabel=String(y_feature),
-        xlim=xlims,
-        ylim=ylims,
-        markershape=:circle,
-        alpha=0.8,
-        markerstrokecolor=:transparent,
-        title="Correct vs Misclassified: $(join(labels, ", "))")
-
-    scatter!(x[misclass_mask], y[misclass_mask],
-        label="Misclassified",
-        markershape=:circle,
-        alpha=0.8,
-        markerstrokecolor=:transparent)
-end
-
 # ╔═╡ de4cc03d-35b1-46ce-b73f-1ac690033e07
 md"""
 #### train _ one _ vs _ rest (df, label; ...)
@@ -1056,10 +1020,7 @@ begin
 	        prev_test_loss = test_loss
 			sample_preds = model(X_train[:, 1:10])
 			sample_labels = y_train[:, 1:10]
-	        # Print progress
-	        if epoch % 5 == 0 || epoch == 1
-	            println("Epoch $epoch: Train loss = $train_loss, Test loss = $test_loss")
-	        end
+	        
 	    end
 	
 	    # Evaluate accuracy
@@ -1132,7 +1093,7 @@ begin
     summary_table
 end
 
-# ╔═╡ 19d41fab-75b9-4656-b8fc-4ad2ada7204c
+# ╔═╡ cba62f20-fbbd-482f-b1a6-07f32ea7eb14
 # ╠═╡ show_logs = false
 begin
     num_features = size(testsets[first(keys(testsets))][:X_test], 1)
@@ -1150,19 +1111,8 @@ begin
         append!(all_y_true, vec(y_test))
         append!(all_y_pred, vec(preds))
     end
-
-    (all_X, all_y_true, all_y_pred)
 end
 
-# ╔═╡ 94f81aa9-79a9-468d-9d33-9af313ced54a
-plot_misclassified_scatter(
-    all_X, all_y_true, all_y_pred;
-    x_feature=row_vis,
-    y_feature=col_vis,
-    xlims=(x_min_vis, x_max_vis),
-    ylims=(y_min_vis, y_max_vis),
-    labels=vis_labels
-)
 
 # ╔═╡ 492c00e5-6d83-4da5-bb6c-4d3af1669f37
 md" ### Visualization
@@ -1394,41 +1344,38 @@ plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2
 md" #### MLP Visualization"
 
 # ╔═╡ 5884859e-2289-4cd3-8308-6b6093037014
-# ╠═╡ disabled = true
-#=╠═╡
 
 """
-Main function to plot both class density and misclassification heatmaps.
+Function to plot both correct vs misclassfied points.
 """
 function plot_overall_correct_vs_wrong(X, y_true, y_pred;
-        x_feature::Symbol, y_feature::Symbol,
-        xlims::Tuple, ylims::Tuple
-    )
+        x_feature::Symbol, y_feature::Symbol)
 
     correct_mask = (y_pred .> 0.4) .== (y_true .> 0.5)
     misclass_mask = .!correct_mask
 
-    # Find feature indices
     feature_list = selected_features()
     f1 = findfirst(==(x_feature), feature_list)
-	f2 = findfirst(==(y_feature), feature_list)
+    f2 = findfirst(==(y_feature), feature_list)
 
-xlabel = String(x_feature)
-ylabel = String(y_feature)
+    if isnothing(f1) || isnothing(f2)
+        return plot(title="Invalid feature selection")
+    end
 
     x = X[f1, :]
     y = X[f2, :]
 
+    xlabel = String(x_feature)
+    ylabel = String(y_feature)
+
     scatter(x[correct_mask], y[correct_mask],
         label="Correct",
-        xlabel=x_feature,
-        ylabel=y_feature,
-        xlim=xlims,
-        ylim=ylims,
+        xlabel=xlabel,
+        ylabel=ylabel,
         markershape=:circle,
         alpha=0.8,
         markerstrokecolor=:transparent,
-        title="Correct vs Misclassified")
+        title="Correct vs Misclassified: $(join(vis_labels, ", "))")
 
     scatter!(x[misclass_mask], y[misclass_mask],
         label="Misclassified",
@@ -1437,10 +1384,8 @@ ylabel = String(y_feature)
         markerstrokecolor=:transparent)
 end
 
-  ╠═╡ =#
 
-# ╔═╡ d1ce0c07-6bb9-46a3-873e-2f67034b8147
-#=╠═╡
+# ╔═╡ 186e2ae7-d659-44a6-b84c-041c313a7031
 begin
     X, y_true, y_pred = (all_X, all_y_true, all_y_pred)
 
@@ -1448,31 +1393,164 @@ begin
         X, y_true, y_pred;
         x_feature=row_vis,
         y_feature=col_vis,
-        xlims=(x_min_vis, x_max_vis),
-        ylims=(y_min_vis, y_max_vis)
     )
 end
 
-  ╠═╡ =#
 
-# ╔═╡ 0b0c9faf-1e64-47f4-a702-0215b67ecc30
-begin
-    X, _, _ = (all_X, all_y_true, all_y_pred)
-    feature_list = selected_features()
+# ╔═╡ 2c41091b-60d4-4e53-9543-fbe913442dcb
+"""
+Function to plot both a prediction heatmap to show confidence.
+"""
+function plot_prediction_heatmap_combined(
+    models::Dict,  # all models
+    selected::Vector{String},   # e.g. ["lae", "agn"]
+    x_feature::Symbol,
+    y_feature::Symbol;
+    X::Matrix=undef,
+    feature_list=selected_features(),
+    mode::Symbol=:maxconf,  # or :argmax
+    resolution::Int=100
+)
+    f1 = findfirst(==(x_feature), feature_list)
+    f2 = findfirst(==(y_feature), feature_list)
 
-    f1 = findfirst(==(row_vis), feature_list)
-    f2 = findfirst(==(col_vis), feature_list)
-
-    if isnothing(f1) || isnothing(f2) || isempty(vis_labels)
-        ((0.0, 1.0), (0.0, 1.0))
-    else
-        x_vals = X[f1, :]
-        y_vals = X[f2, :]
-        x_range = (floor(minimum(x_vals), digits=1), ceil(maximum(x_vals), digits=1))
-        y_range = (floor(minimum(y_vals), digits=1), ceil(maximum(y_vals), digits=1))
-        (x_range, y_range)
+    if isnothing(f1) || isnothing(f2)
+        return plot(title="Invalid feature selection")
     end
+
+    # Get range from data if available
+    if X === undef || size(X, 2) == 0
+        return plot(title="No data in selected labels")
+    end
+
+    xlims = (minimum(X[f1, :]), maximum(X[f1, :]))
+    ylims = (minimum(X[f2, :]), maximum(X[f2, :]))
+
+    xs = range(xlims[1], xlims[2], length=resolution)
+    ys = range(ylims[1], ylims[2], length=resolution)
+
+    Z = zeros(resolution, resolution)
+
+    for (i, xval) in enumerate(xs), (j, yval) in enumerate(ys)
+        input_vec = zeros(length(feature_list))
+        input_vec[f1] = xval
+        input_vec[f2] = yval
+
+        preds = [models[label](input_vec)[1] for label in selected]
+
+        if mode == :maxconf
+            Z[j, i] = maximum(preds)
+        elseif mode == :argmax
+            Z[j, i] = argmax(preds)  # for class heatmap
+        end
+    end
+
+    heatmap(xs, ys, Z,
+        xlabel=String(x_feature),
+        ylabel=String(y_feature),
+        colorbar_title=mode == :maxconf ? "Max Confidence" : "Class Index",
+        title="Prediction Heatmap: $(join(selected, ", "))")
 end
+
+# ╔═╡ 45d4d7e3-5afc-4bb8-a8a6-b06da9ea14f7
+# ╠═╡ show_logs = false
+plot_prediction_heatmap_combined(
+    models, vis_labels,
+    row_vis, col_vis;
+    X=all_X,
+    mode=:maxconf
+)
+
+# ╔═╡ 91c5db06-74db-452b-841d-000e0d81948d
+"""
+function that plots missclassification heatmap.
+"""
+function plot_misclassification_heatmap_combined(
+    models::Dict,
+    testsets::Dict,
+    selected_labels::Vector{String},
+    x_feature::Symbol,
+    y_feature::Symbol;
+    feature_list=selected_features(),
+    resolution=50
+)
+    f1 = findfirst(==(x_feature), feature_list)
+    f2 = findfirst(==(y_feature), feature_list)
+
+    if isnothing(f1) || isnothing(f2) || isempty(selected_labels)
+        return plot(title="Invalid input or no labels selected")
+    end
+
+    # Collect data across selected models
+    all_X = Array{Float64}(undef, length(feature_list), 0)
+    all_y_true = Float64[]
+    all_y_pred = Float64[]
+
+    for label in selected_labels
+        X = testsets[label][:X_test]
+        y = testsets[label][:y_test]
+        model = models[label]
+        pred = model(X)
+
+        all_X = hcat(all_X, X)
+        append!(all_y_true, vec(y))
+        append!(all_y_pred, vec(pred))
+    end
+
+    x_vals = all_X[f1, :]
+    y_vals = all_X[f2, :]
+
+    correct_mask = (all_y_pred .> 0.4) .== (all_y_true .> 0.5)
+
+    x_range = (minimum(x_vals), maximum(x_vals))
+    y_range = (minimum(y_vals), maximum(y_vals))
+
+    x_edges = range(x_range[1], x_range[2], length=resolution+1)
+    y_edges = range(y_range[1], y_range[2], length=resolution+1)
+
+    Z = fill(NaN, resolution, resolution)
+    counts = zeros(Int, resolution, resolution)
+    errors = zeros(Int, resolution, resolution)
+
+    for i in 1:length(x_vals)
+        x = x_vals[i]
+        y = y_vals[i]
+        is_correct = correct_mask[i]
+
+        xi = searchsortedfirst(x_edges, x) - 1
+        yi = searchsortedfirst(y_edges, y) - 1
+
+        if 1 <= xi <= resolution && 1 <= yi <= resolution
+            counts[yi, xi] += 1
+            if !is_correct
+                errors[yi, xi] += 1
+            end
+        end
+    end
+
+    for i in 1:resolution, j in 1:resolution
+        if counts[i, j] > 0
+            Z[i, j] = errors[i, j] / counts[i, j]
+        end
+    end
+
+    heatmap(
+        x_edges[1:end-1], y_edges[1:end-1], Z;
+        xlabel=String(x_feature),
+        ylabel=String(y_feature),
+        colorbar_title="Misclassification Rate",
+        title="Misclassification Heatmap: $(join(selected_labels, ", "))"
+    )
+end
+
+# ╔═╡ 995a4b27-a3d4-4bce-bd7f-fceda11c62ac
+# ╠═╡ show_logs = false
+plot_misclassification_heatmap_combined(
+    models, testsets, vis_labels,
+    row_vis, col_vis;
+	resolution=150
+)
+
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -4438,25 +4516,28 @@ version = "1.4.1+2"
 # ╠═60a700c3-354f-4948-be92-2eda822618b4
 # ╟─cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 # ╟─06078401-9a5a-41bf-a971-060466db94fe
-# ╠═a59b1973-145d-4ff6-9ccb-52fff65abd9b
-# ╠═b2af9b62-0ef5-452b-9907-acf402514906
+# ╟─a59b1973-145d-4ff6-9ccb-52fff65abd9b
+# ╟─b2af9b62-0ef5-452b-9907-acf402514906
 # ╟─30c918e8-29e2-4cd3-9cfb-180f90024449
 # ╟─db456dab-1e63-4378-9c0d-1e98bcc022f0
-# ╠═6e060af6-2a84-4118-b6d2-fc90f213b183
+# ╟─6e060af6-2a84-4118-b6d2-fc90f213b183
 # ╟─e374f348-cc30-410f-8f33-3b1b04febc82
 # ╠═1d61a378-6f6a-459a-a280-2ca0eea69b5f
 # ╟─4b3932b9-dfdc-4e85-9760-d863cfd8abce
 # ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
-# ╠═d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
-# ╠═bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
-# ╠═05de7c5b-cd38-4cf7-8530-34c22d63ca79
+# ╟─d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
+# ╟─bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
+# ╟─05de7c5b-cd38-4cf7-8530-34c22d63ca79
 # ╟─3d693c6c-3cb6-4172-8356-ba8716d66efc
 # ╠═fa59defd-6da1-47ee-974c-68cee481e032
 # ╠═d8669fd4-ec53-456f-9be9-f3198a914185
 # ╠═9f1d4678-d25e-4b07-81d3-7db7049a83c2
 # ╟─5ac62a72-03c2-4b48-952b-8b52367b2d56
-# ╠═54f5a2d1-0624-4379-9aa4-03a90f7fed8e
+# ╟─54f5a2d1-0624-4379-9aa4-03a90f7fed8e
+# ╟─ae3a4684-f2a2-46cd-885d-6e708d7e6ee5
 # ╟─9e84a02f-69b4-47b2-8336-fdab1e8a58d0
+# ╟─6577cfe5-8c62-4c50-b910-05f919f51868
+# ╟─d72d878d-5517-4063-8789-f07a0b02e7b3
 # ╟─9b0bfddb-47ce-4686-81f7-22aadb3a7d92
 # ╟─bc8fef1b-f7b0-4a10-8bf6-f323f1e85558
 # ╟─7c2bb9a7-4d6a-410f-b477-70f5cd379caa
@@ -4465,13 +4546,11 @@ version = "1.4.1+2"
 # ╟─98a97d21-e2cf-4b5a-9010-19b6a6ce67f5
 # ╟─2af6c817-d15a-4e94-9e72-551678da050a
 # ╟─15a65ab0-6d6b-4f88-b009-ec4e33203cf6
-# ╠═19d41fab-75b9-4656-b8fc-4ad2ada7204c
-# ╠═0b0c9faf-1e64-47f4-a702-0215b67ecc30
-# ╟─a2990273-66f9-411a-91ad-7df278971b13
-# ╠═94f81aa9-79a9-468d-9d33-9af313ced54a
-# ╟─ce3014ce-f173-4b6d-93f2-a61bf78cd71d
-# ╟─393854ca-2f40-43f0-8827-59e75e33a2db
-# ╠═d1ce0c07-6bb9-46a3-873e-2f67034b8147
+# ╟─cba62f20-fbbd-482f-b1a6-07f32ea7eb14
+# ╟─186e2ae7-d659-44a6-b84c-041c313a7031
+# ╟─01290a3d-0636-46f1-9ad6-dd4eee59c99c
+# ╟─45d4d7e3-5afc-4bb8-a8a6-b06da9ea14f7
+# ╟─995a4b27-a3d4-4bce-bd7f-fceda11c62ac
 # ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
@@ -4507,11 +4586,13 @@ version = "1.4.1+2"
 # ╟─1a85f137-78e4-4dc2-9dd5-352bf2246a08
 # ╟─7dba6134-a6a7-401e-8573-5b02e19e852b
 # ╟─8736b3c5-13f1-4fc3-9f9f-e064595afc17
-# ╠═ae2e3e69-e2b5-4dcb-8f49-7977c2c05110
+# ╟─ae2e3e69-e2b5-4dcb-8f49-7977c2c05110
 # ╟─b28aeedc-c588-4319-a535-3906d13bbd26
 # ╟─e9150269-15e4-434f-866f-8adac9aeeafb
 # ╟─1d4bfc4f-2dfd-4078-8fb4-28f31c7a3af9
 # ╟─906eef4d-a8a5-481f-8f2b-f39a6612e73a
-# ╠═5884859e-2289-4cd3-8308-6b6093037014
+# ╟─5884859e-2289-4cd3-8308-6b6093037014
+# ╟─2c41091b-60d4-4e53-9543-fbe913442dcb
+# ╟─91c5db06-74db-452b-841d-000e0d81948d
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
