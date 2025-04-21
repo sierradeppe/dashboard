@@ -45,6 +45,7 @@ md"""
 # ╔═╡ 7992ba99-db91-45b1-bcdd-4be7c273417f
 md"""
 # Ingest & validate data
+Here, we check if the files exist on local storage.
 """
 
 # ╔═╡ 7fcdc2bb-cc2d-4601-9327-69a9794e1faa
@@ -60,6 +61,15 @@ md"""
 
 We download chosen files from the HETDEX catalogue and then convert the native ECSV file to a dataframe more familiar to Julia.
 """
+
+# ╔═╡ d1f50b49-a769-4174-86b6-d9fb2275ad8d
+md"
+Two files come in the query: 
+- The Source Observation Table: hetdex_sc1_vX.dat/.fits/.ecsv
+- The Detection Information Table: hetdex_sc1_detinfo_vX.fits/.dat/.ecsv
+
+The source observation table contains one row per source while the detection information table contains one row per continuum or detection, which gives more information about bright sources. This dashboard uses the detection information table both for more data and for the fact that it contains more information like SNR, line flux, line width, and other parameters that are used in the classification algorithm.
+"
 
 # ╔═╡ 92be734b-4a14-4f51-96d6-bd70664db385
 md"""
@@ -126,21 +136,6 @@ md"""
 Below, continuum values below zero are removed to create our baseline dataframe. The first option for filtering is introduced in which any data farther than 3σ is removed. This is a very common technique in astronomy. 
 """
 
-# ╔═╡ 8686dc59-679b-42ee-b6dd-0f94c61740fd
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-	plt3 = plot()
-	for source_type in source_types
-	    type_data = filter(row -> row.source_type == source_type, filtered_df_new_std)
-	    scatter!(plt3, type_data.z_hetdex, type_data.continuum, label="$(source_type)", xlabel="Z", ylabel="Continuum (erg/cm²/s)")
-	end
-	
-	display(plt3)
-	plt3
-end
-  ╠═╡ =#
-
 # ╔═╡ 318e021b-09d0-4c61-bb70-63f3267d89e3
 md"""
 \
@@ -153,26 +148,6 @@ A low MAD threshold suggests that the data might be very flat and absolute devia
 
 A higher MAD threshold implies the presence of more significant outliers. In this case, any data that is within 10x the threshold is kept to remove only the most extreme of outliers, and all other points are discarded. This method typically results in keeping more data.
 """
-
-# ╔═╡ 97605a73-dafd-4740-ae33-999dfa7fd7bd
-function filter_extrema(df::DataFrame, colname::Symbol)
-    col = df[!, colname]
-    col_median = median(col)
-    col_mad = 1.4826 * median(abs.(col .- col_median))
-    println("MAD for $colname: $col_mad")
-
-    if col_mad < 0.3
-        println("MAD too small for $colname, using percentiles")
-        pi = percentile(col, 1)
-        pf = percentile(col, 99)
-        return (pi .≤ col) .& (col .≤ pf)
-    else
-        println("Using MAD filter for $colname")
-        threshold = 10
-        return abs.(col .- col_median) .≤ (threshold * col_mad)
-    end
-end
-
 
 # ╔═╡ cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 md"""
@@ -225,8 +200,11 @@ md"""
 The below cell runs the formula to generate a model for each source type. The following cell then makes predictions, assigns classifications, checks accuracy, and displays the results for easy review.
 """
 
+# ╔═╡ 2c22c70b-973d-42d0-bfdd-1f62e9a02fe7
+md" Ready to run? $(@bind run_code CheckBox(;default=false))"
+
 # ╔═╡ db456dab-1e63-4378-9c0d-1e98bcc022f0
-begin
+if run_code
 	Tri = false
 	Bi = false
 	
@@ -292,7 +270,7 @@ Slide to adjust y range:
 md"""
 \
 
-## Multilayer Perceptron - Classification
+# Multilayer Perceptron - Classification
 In Astronomy, classification between more than two objects is usually done with MLPs. This is a good problem for an MLP since the data is tabular, there is no requirement for spatial structure and it is easy to build in Flux. It is also fast and flexible which is good for a project that required a lot of re-working. I used a one-vs-rest scheme.This trains one binary classifier per class, where each classifier learns to distinguish that class from all others. During prediction, all classifiers are run, and the class with the highest confidence score is selected as the final label.
 """
 
@@ -398,6 +376,23 @@ end
 # ╔═╡ 01290a3d-0636-46f1-9ad6-dd4eee59c99c
 md"
 Here are two heatmaps. They also alow affected by your selections above. The prediction heatmap shows the confidence around specific areas within the features. The missclassification heatmap can show specific areas where the MLP is struggling.
+"
+
+# ╔═╡ d6aca807-20e0-4e07-b815-c02573147818
+md"
+# Conclusions
+Ideally, a complex MLP model like the one we use should be performing better, especially given its depth and nonlinearity. However, the current results highlight several issues that likely contribute to its under-performance. The main one is Class Imbalance i.e. the model is heavily skewed by the overwhelming number of LAEs compared to LZGs and AGNs. This leads to poor generalization, especially for underrepresented classes like LZG, which shows the weakest performance in both accuracy and loss curves.
+
+The current features might not be expressive enough to capture class differences. Enhancing the feature set with domain-specific or engineered variables could help the model better separate the classes.
+
+
+## Next Steps
+
+   To improve results, we should:
+   - Oversample
+   - Undersample
+   - Include the oii and star sets
+   - Boosting algorithms
 "
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
@@ -510,10 +505,14 @@ function process_hetdex_files()
 end
 
 # ╔═╡ 08c58fe0-05cb-4261-b439-125e23bef928
+# ╠═╡ show_logs = false
 dfs = process_hetdex_files()
 
 # ╔═╡ b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
-df = dfs["hetdex_sc1_detinfo_v3.2.ecsv"]
+begin
+	df = dfs["hetdex_sc1_detinfo_v3.2.ecsv"]
+	print("")
+end
 
 # ╔═╡ dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
 begin
@@ -538,6 +537,7 @@ begin
 	        	    
 	# Return the filtered dataframe for use in later cells
 	filtered_df
+	print("")
 end
 
 # ╔═╡ 156347d1-4d07-4745-90c8-1287d2179a79
@@ -575,79 +575,14 @@ begin
 end
 
 # ╔═╡ 7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
-#only positive values
-filtered_df_new = filter(row -> row.continuum ≥ 0, filtered_df)
-
-# ╔═╡ 7b40310a-5555-4567-937e-5002563f547d
-begin
-	function filter_extreme_continuum_std(df)
-	    cont_median = median(df.continuum)
-	    cont_std = std(df.continuum)
-	
-	    # Define a threshold in terms of standard deviations
-	    threshold = 3  # Adjust as needed (e.g., 2 for stricter filtering)
-	
-	    df = filter(row -> abs(row.continuum - cont_median) ≤ threshold * cont_std, df)
-	
-	    return df
-	end
-	
-	filtered_df_new_std = filter_extreme_continuum_std(filtered_df_new)
-	
-end
-
-# ╔═╡ c03dadf8-011e-4b69-96fe-83330bf1f20a
-println("Filtered dataset size: ", size(filtered_df_new_std))
-
-# ╔═╡ 79c8e397-c121-4553-9e45-c3005a737fdf
-begin
-	cols_to_filter = [:continuum, :gmag, :sigma, :flux, :sn, :Av, :wave, :z_hetdex, :apcor]
-	
-	# Start with all `true`
-	combined_mask = trues(nrow(filtered_df_new))
-	
-	for col in cols_to_filter
-	    mask = filter_extrema(filtered_df_new, col)
-	    combined_mask .&= mask  # keep only rows that pass *all* filters
-	end
-	
-	filtered_df_new_per = filtered_df_new[combined_mask, :]
-	
-end
-
-# ╔═╡ 1bb82599-45c3-4cf1-a80f-054933cc2515
 # ╠═╡ show_logs = false
 begin
-    scalefontsizes()
-    scalefontsizes(1)
-    
-    plt2 = plot(
-        legend = :topright,
-        fontfamily = my_font,
-        xlabel = row_type,
-        ylabel = col_type,
-        title = "$(row_type) vs $(col_type)"
-    )
-    
-    for (i, source_type) in enumerate(source_types)
-        type_data = filter(row -> row.source_type == source_type, filtered_df_new_per)
-        
-        scatter!(
-            plt2,
-            type_data[:, x_col],  # Use the dynamically selected x parameter
-            type_data[:, y_col],  # Use the dynamically selected y parameter
-            markercolor = colors[i],
-            label = source_type,
-            markersize = 3,
-            markerstrokewidth = 0.5
-        )
-    end
-    
-    plt2
+	#only positive values
+	filtered_df_new = filter(row -> row.continuum ≥ 0, filtered_df)
+	filtered_df_new = filter(row -> row.flux ≥ 0, filtered_df_new)
+	filtered_df_new = filter(row -> row.z_hetdex ≥ 0, filtered_df_new)
+	println()
 end
-
-# ╔═╡ 60a700c3-354f-4948-be92-2eda822618b4
-size(filtered_df_new_per)
 
 # ╔═╡ f3c7b4fc-4711-4984-bc57-041b0ae4ba74
 md" ### Preprocessing"
@@ -690,6 +625,76 @@ function encode_source_type(df::DataFrame, source::String,og)
     return df_copy
 end
 
+# ╔═╡ 63a9be05-ba6a-4fb1-9266-c50407d30a9d
+"""
+Function to filter out extreme values
+"""
+function filter_extrema(df::DataFrame, colname::Symbol)
+    col = df[!, colname]
+    col_median = median(col)
+    col_mad = 1.4826 * median(abs.(col .- col_median))
+    println("MAD for $colname: $col_mad")
+
+    if col_mad < 0.3
+        println("MAD too small for $colname, using percentiles")
+        pi = percentile(col, 1)
+        pf = percentile(col, 99)
+        return (pi .≤ col) .& (col .≤ pf)
+    else
+        println("Using MAD filter for $colname")
+        threshold = 10
+        return abs.(col .- col_median) .≤ (threshold * col_mad)
+    end
+end
+
+
+# ╔═╡ 79c8e397-c121-4553-9e45-c3005a737fdf
+begin
+	cols_to_filter = [:continuum, :gmag, :sigma, :flux, :sn, :Av, :wave, :z_hetdex, :apcor]
+	
+	#Start with all `true`
+	combined_mask = trues(nrow(filtered_df_new))
+	
+	for col in cols_to_filter
+	    mask = filter_extrema(filtered_df_new, col)
+	    combined_mask .&= mask  # keep only rows that pass *all* filters
+	end
+	
+	filtered_df_new_per = filtered_df_new[combined_mask, :]
+	
+end
+
+# ╔═╡ 1bb82599-45c3-4cf1-a80f-054933cc2515
+# ╠═╡ show_logs = false
+begin
+    scalefontsizes()
+    scalefontsizes(1)
+    
+    plt2 = plot(
+        legend = :topright,
+        fontfamily = my_font,
+        xlabel = row_type,
+        ylabel = col_type,
+        title = "$(row_type) vs $(col_type)"
+    )
+    
+    for (i, source_type) in enumerate(source_types)
+        type_data = filter(row -> row.source_type == source_type, filtered_df_new_per)
+        
+        scatter!(
+            plt2,
+            type_data[:, x_col],  # Use the dynamically selected x parameter
+            type_data[:, y_col],  # Use the dynamically selected y parameter
+            markercolor = colors[i],
+            label = source_type,
+            markersize = 3,
+            markerstrokewidth = 0.5
+        )
+    end
+    
+    plt2
+end
+
 # ╔═╡ 00a0ff76-b5c6-4340-a146-af6bfd7cc68b
 md" ### Running the Binary LogReg Model"
 
@@ -716,13 +721,16 @@ function tri_class()    # Classify "lae"
 end
 
 # ╔═╡ 6e060af6-2a84-4118-b6d2-fc90f213b183
-if Tri 
-	fit_agn, fit_lae, fit_lzg = tri_class()
-elseif Bi 
-	df_two, mapping = encode_two(filtered_df_new_per)
-	fit_two = glm(fm_all, df_two, Binomial(), LogitLink())
-else
-	print("ERROR: you must select at least two object types to run this model.")
+if run_code
+
+	if Tri 
+		fit_agn, fit_lae, fit_lzg = tri_class()
+	elseif Bi 
+		df_two, mapping = encode_two(filtered_df_new_per)
+		fit_two = glm(fm_all, df_two, Binomial(), LogitLink())
+	else
+		print("ERROR: you must select at least two object types to run this model.")
+	end
 end
 
 # ╔═╡ 649c5cf6-ac7f-4393-b198-3edbee5bbf59
@@ -851,12 +859,14 @@ function tri_pred()
 end
 
 # ╔═╡ 1d61a378-6f6a-459a-a280-2ca0eea69b5f
-if Tri
-	predictions, conf_matrix_df = tri_pred()
-	conf_matrix_df
-elseif Bi
-	predictions, conf_df = binary_predict()
-	conf_df
+if run_code
+	if Tri
+		predictions, conf_matrix_df = tri_pred()
+		conf_matrix_df
+	elseif Bi
+		predictions, conf_df = binary_predict()
+		conf_df
+	end
 end
 
 # ╔═╡ d45b8d13-2bc9-4f1d-8bf2-85e37350cec6
@@ -876,11 +886,9 @@ Returns a handpicked list of columns (features) from the HETDEX data used for mo
 """
 
 # ╔═╡ 71113ed5-c3a2-4cc3-89e1-d1a3dd5ab344
-# Choose features from combined DataFrame
+# Feature list
 function selected_features()
-        return [
-            :continuum, :gmag, :sigma, :flux, :sn, :Av, :wave, :z_hetdex, :apcor
-        ]
+	return [:continuum, :gmag, :sigma, :flux, :sn, :Av, :wave, :z_hetdex, :apcor]
 end
 
 # ╔═╡ 2af6c817-d15a-4e94-9e72-551678da050a
@@ -898,18 +906,20 @@ Trains a binary classifier to distinguish one label vs all others. It first norm
 # ╔═╡ e3081c77-7076-4364-afb3-a5f542f75fb7
 md"""
 #### normalize_features()
-Returns a handpicked list of columns (features) from the HETDEX data used for model training.
 """
 
 # ╔═╡ d8a47390-083d-4eea-b62d-a72b2ca0defe
+"""
+Normalize features using training set stats
+"""
 function normalize_features(X)
-        X_norm = similar(X)
-        for j in 1:size(X, 2)
-            μ = mean(X[:, j])
-            σ = std(X[:, j]) + eps()
-            X_norm[:, j] = (X[:, j] .- μ) ./ σ
-        end
-        return X_norm
+	X_norm = similar(X)
+	for j in 1:size(X, 2)
+		μ = mean(X[:, j])
+		σ = std(X[:, j]) + eps()
+		X_norm[:, j] = (X[:, j] .- μ) ./ σ
+	end
+	return X_norm
 end
 
 # ╔═╡ a98db5bb-a571-423d-9561-f619a2e4822f
@@ -919,157 +929,150 @@ Splits training data into shuffled mini-batches.
 """
 
 # ╔═╡ 96f7bf4d-38c7-43f9-ac59-b166df283f0b
+# Create mini-batches
 function create_batches(X, y, batch_size)
-        n = size(X, 2)
-        indices = shuffle(1:n)
-        batches = []
-        for i in 1:batch_size:n
-            end_idx = min(i + batch_size - 1, n)
-            push!(batches, (X[:, indices[i:end_idx]], y[:, indices[i:end_idx]]))
-        end
-        return batches
+	n = size(X, 2)
+	indices = shuffle(1:n)
+	batches = []
+	for i in 1:batch_size:n
+		end_idx = min(i + batch_size - 1, n)
+		push!(batches, (X[:, indices[i:end_idx]], y[:, indices[i:end_idx]]))
+	end
+	return batches
 end
 
 # ╔═╡ e7beecb7-727a-4a4b-b956-671c4e04ac4d
-begin
-	# Train a binary classifier (one-vs-rest)
-	function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rate, choose_weight= false , weight= 1.0)
-	    X = Matrix{Float64}(df[:, features])
+function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rate, choose_weight=false, weight=1.0)
+	    Random.seed!(42)  # reproducibility
+	    
 	    y_raw = strip.(lowercase.(String.(df.source_type)))
-	    y_binary = [label == yi ? 1.0 : 0.0 for yi in y_raw]
-	    # Normalize
-	    X_norm = normalize_features(X)
-	    # Split train/test
-	    n = size(X_norm, 1)
-	    idx = shuffle(1:n)
-	    train_idx = idx[1:Int(floor(0.8 * n))]
-	    test_idx = idx[Int(floor(0.8 * n)) + 1:end]
-	    X_train = X_norm[train_idx, :]'
-	    y_train = reshape(y_binary[train_idx], 1, :)
-	    X_test  = X_norm[test_idx, :]'
-	    y_test  = reshape(y_binary[test_idx], 1, :)
+	    X_all = Matrix{Float64}(df[:, features])
+
+	    pos_idx = findall(x -> x == label, y_raw)
+	    neg_idx = findall(x -> x != label, y_raw)
+	    N = min(length(pos_idx), length(neg_idx), 323)  # max per class
+	    train_pos_idx = rand(pos_idx, N)
+	    train_neg_idx = rand(neg_idx, N)
+	    train_idx = vcat(train_pos_idx, train_neg_idx)
+	    shuffle!(train_idx)
+
+	    test_mask = trues(length(y_raw))
+	    test_mask[train_idx] .= false
+	    test_idx = findall(test_mask)
+
+	    X_train = X_all[train_idx, :]
+	    y_train = reshape([y_raw[i] == label ? 1.0 : 0.0 for i in train_idx], 1, :)
+	    X_test = X_all[test_idx, :]
+	    y_test = reshape([y_raw[i] == label ? 1.0 : 0.0 for i in test_idx], 1, :)
+
+	    X_train = normalize_features(X_train)
+	    X_test = normalize_features(X_test)
+	    X_train = X_train'
+	    X_test = X_test'
+
 	    # Model
 	    input_dim = size(X_train, 1)
-	    model = Chain(
-	        Dense(input_dim, 64, relu),
-	        Dense(64, 32, relu),
-	        Dense(32, 1),
-	        sigmoid
-	    )
+	    model = Chain(Dense(input_dim, 64, relu), Dense(64, 32, relu), Dense(32, 1), sigmoid)
+
 	    function safe_bce(pred, target)
-	        # Clip predictions to avoid exact 0 or 1
 	        pred_safe = clamp.(pred, 1e-7, 1 - 1e-7)
-	        return Flux.binarycrossentropy(pred_safe, target)
-		end	
-		function weighted_bce(pred, target; weight)
-		    pred_safe = clamp.(pred, 1e-7, 1 - 1e-7)
-		    return -mean(weight .* target .* log.(pred_safe) .+ (1 .- target) .* log.(1 .- pred_safe))
-		end
+	        Flux.binarycrossentropy(pred_safe, target)
+	    end
 
-		function class_weight(label, df; alpha=1.2)
-		    total = nrow(df)
-		    label_count = sum(strip.(lowercase.(String.(df.source_type))) .== label)
-		    freq = label_count / total
-		    return (1 / freq)^alpha
-		end
-		
+	    function weighted_bce(pred, target; weight)
+	        pred_safe = clamp.(pred, 1e-7, 1 - 1e-7)
+	        -mean(weight .* target .* log.(pred_safe) .+ (1 .- target) .* log.(1 .- pred_safe))
+	    end
 
-		weight_used = choose_weight ? class_weight(label, df) : 1.0
+	    function class_weight(label, df; alpha=1.2)
+	        total = nrow(df)
+	        label_count = sum(strip.(lowercase.(String.(df.source_type))) .== label)
+	        freq = label_count / total
+	        (1 / freq)^alpha
+	    end
 
-		loss_fn(x, y) = choose_weight ?
-		    weighted_bce(model(x), y; weight=weight_used) :
-		    safe_bce(model(x), y)
+	    weight_used = choose_weight ? class_weight(label, df) : 1.0
+	    loss_fn(x, y) = choose_weight ?
+	        weighted_bce(model(x), y; weight=weight_used) :
+	        safe_bce(model(x), y)
 
-		
 	    opt = ADAM(learning_rate)
 	    state = Flux.setup(opt, model)
 	    train_losses = Float64[]
 	    test_losses = Float64[]
-	    # Track previous loss for fallback
 	    prev_train_loss = nothing
 	    prev_test_loss = nothing
-	
+
 	    for epoch in 1:epochs
 	        for (x_batch, y_batch) in create_batches(X_train, y_train, batch_size)
 	            loss, back = Flux.withgradient(model -> loss_fn(x_batch, y_batch), model)
-	            batch_losses = Float64[]
-	            # Skip update if gradient contains NaN
 	            if any(isnan, Flux.params(back))
 	                @warn "NaN gradient detected, skipping batch"
 	                continue
 	            end
-	
 	            state, model = Optimisers.update!(state, model, back)
-	            push!(batch_losses, loss)
 	        end
-	        # Calculate and record epoch losses with safeguards
 	        train_loss = loss_fn(X_train, y_train)
 	        if isnan(train_loss) || isinf(train_loss)
-	            @warn "NaN/Inf detected in training loss, using fallback value"
+	            @warn "NaN/Inf in training loss"
 	            train_loss = prev_train_loss !== nothing ? prev_train_loss : 10.0
 	        end
 	        push!(train_losses, train_loss)
 	        prev_train_loss = train_loss
-			
+
 	        test_loss = loss_fn(X_test, y_test)
 	        if isnan(test_loss) || isinf(test_loss)
-	            @warn "NaN/Inf detected in test loss, using fallback value"
+	            @warn "NaN/Inf in test loss"
 	            test_loss = prev_test_loss !== nothing ? prev_test_loss : 10.0
 	        end
 	        push!(test_losses, test_loss)
 	        prev_test_loss = test_loss
-			sample_preds = model(X_train[:, 1:10])
-			sample_labels = y_train[:, 1:10]
-	        
 	    end
-	
-	    # Evaluate accuracy
-	    preds = clamp.(model(X_test), 1e-7, 1-1e-7) .> 0.4
+
+	    preds = clamp.(model(X_test), 1e-7, 1 - 1e-7) .> 0.4
 	    acc = mean(preds .== (y_test .> 0.5))
-		println("Using weight = $(round(weight_used, digits=2)) for label = $label (weighted = $choose_weight)")
+	    println("Using weight = $(round(weight_used, digits=2)) for label = $label (weighted = $choose_weight)")
 
 	    return model, acc, (train_losses, test_losses), (X_test=X_test, y_test=y_test)
 	end
-		
-end
 
 # ╔═╡ 3ec317d6-d920-41a7-987e-e84b767571de
 begin
-	# Main entry point
-	function train_hetdex_models(dfs::Dict; epochs=20, batch_size=64, learning_rate=0.001, choose_weight= false , weight= 1.0)
+	function train_hetdex_models(dfs::Dict; epochs=20, batch_size=64, learning_rate=0.001, choose_weight=false, weight=1.0)
 	    println("--- Processing and training for HETDEX ---")
 	    df = dfs[:filtered]
-	    # Train one-vs-rest models for each class
 	    labels = sort(unique(strip.(lowercase.(String.(df.source_type)))))
 	    models = Dict()
 	    metrics = Dict()
 	    testsets = Dict()
 	    train_losslog = Dict()
 	    test_losslog = Dict()
+
 	    for label in labels
 	        println("\nTraining model for class: $label vs rest")
-	        model, acc, (train_losses, test_losses), test_data = train_one_vs_rest(df, label; 
+	        model, acc, (train_losses, test_losses), test_data = train_one_vs_rest(df, label;
 	            features=selected_features(),
-	            epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, 				choose_weight= false , weight= 1.0)
+	            epochs=epochs, batch_size=batch_size,
+	            learning_rate=learning_rate,
+	            choose_weight=choose_weight, weight=weight)
 	        models[label] = model
 	        metrics[label] = acc
 	        testsets[label] = test_data
 	        train_losslog[label] = train_losses
 	        test_losslog[label] = test_losses
 	    end
+
 	    println("\nPer-class accuracy:")
 	    for (label, acc) in metrics
 	        println("$(rpad(label, 10)) : $(round(acc * 100, digits=2))%")
 	    end
 	    return models, metrics, testsets, train_losslog, test_losslog
 	end
-	
 end
 
 # ╔═╡ 54f5a2d1-0624-4379-9aa4-03a90f7fed8e
 # ╠═╡ show_logs = false
 models, metrics, testsets, train_losslog, test_losslog = train_hetdex_models(Dict(:filtered => filtered_df_new_per), choose_weight= use_weight , weight= weight_amt)
-
 
 # ╔═╡ bc8fef1b-f7b0-4a10-8bf6-f323f1e85558
 begin
@@ -1213,7 +1216,7 @@ function plot_scatter(df, predictions, feature_x, feature_y, axes)
 end
 
 # ╔═╡ 72bcd4fb-b1b3-446e-be0c-10b17218ab66
-begin
+if run_code
 	if x_min1 ≥ x_max1 || y_min1 ≥ y_max1
 		print("Error: minimum range must be less than maximum range evaluate_model.")
 	end
@@ -1338,7 +1341,9 @@ end
 
 
 # ╔═╡ fa59defd-6da1-47ee-974c-68cee481e032
-plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2,y_min2,y_max2], 200)
+if run_code
+	plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2,y_min2,y_max2], 200)
+end
 
 # ╔═╡ 906eef4d-a8a5-481f-8f2b-f39a6612e73a
 md" #### MLP Visualization"
@@ -4494,46 +4499,43 @@ version = "1.4.1+2"
 # ╔═╡ Cell order:
 # ╟─45d95a56-951c-4595-bfec-064adff3ca51
 # ╟─7992ba99-db91-45b1-bcdd-4be7c273417f
-# ╠═7fcdc2bb-cc2d-4601-9327-69a9794e1faa
+# ╟─7fcdc2bb-cc2d-4601-9327-69a9794e1faa
 # ╟─f9cde89e-4ec9-4076-baa9-a2189a976ffb
-# ╠═08c58fe0-05cb-4261-b439-125e23bef928
-# ╠═b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
+# ╟─d1f50b49-a769-4174-86b6-d9fb2275ad8d
+# ╟─08c58fe0-05cb-4261-b439-125e23bef928
+# ╟─b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
 # ╟─92be734b-4a14-4f51-96d6-bd70664db385
-# ╟─4ffdd47c-2f29-4807-a0d6-816f547e9f36
-# ╠═dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
+# ╠═4ffdd47c-2f29-4807-a0d6-816f547e9f36
+# ╟─dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
 # ╟─156347d1-4d07-4745-90c8-1287d2179a79
 # ╟─3f822b20-8aec-42c2-bec9-2676ad39f5d2
 # ╟─8cc2e79a-a876-4771-b721-1b00da75f644
 # ╟─c10ffd55-2cc1-4e79-9b70-e515e5baf7ad
 # ╠═7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
-# ╠═7b40310a-5555-4567-937e-5002563f547d
-# ╟─8686dc59-679b-42ee-b6dd-0f94c61740fd
-# ╠═c03dadf8-011e-4b69-96fe-83330bf1f20a
 # ╟─318e021b-09d0-4c61-bb70-63f3267d89e3
-# ╠═97605a73-dafd-4740-ae33-999dfa7fd7bd
 # ╠═79c8e397-c121-4553-9e45-c3005a737fdf
 # ╟─1bb82599-45c3-4cf1-a80f-054933cc2515
-# ╠═60a700c3-354f-4948-be92-2eda822618b4
 # ╟─cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 # ╟─06078401-9a5a-41bf-a971-060466db94fe
 # ╟─a59b1973-145d-4ff6-9ccb-52fff65abd9b
 # ╟─b2af9b62-0ef5-452b-9907-acf402514906
 # ╟─30c918e8-29e2-4cd3-9cfb-180f90024449
+# ╟─2c22c70b-973d-42d0-bfdd-1f62e9a02fe7
 # ╟─db456dab-1e63-4378-9c0d-1e98bcc022f0
 # ╟─6e060af6-2a84-4118-b6d2-fc90f213b183
 # ╟─e374f348-cc30-410f-8f33-3b1b04febc82
-# ╠═1d61a378-6f6a-459a-a280-2ca0eea69b5f
+# ╟─1d61a378-6f6a-459a-a280-2ca0eea69b5f
 # ╟─4b3932b9-dfdc-4e85-9760-d863cfd8abce
-# ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
 # ╟─d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
+# ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
 # ╟─bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
 # ╟─05de7c5b-cd38-4cf7-8530-34c22d63ca79
 # ╟─3d693c6c-3cb6-4172-8356-ba8716d66efc
-# ╠═fa59defd-6da1-47ee-974c-68cee481e032
-# ╠═d8669fd4-ec53-456f-9be9-f3198a914185
-# ╠═9f1d4678-d25e-4b07-81d3-7db7049a83c2
+# ╟─fa59defd-6da1-47ee-974c-68cee481e032
+# ╟─d8669fd4-ec53-456f-9be9-f3198a914185
+# ╟─9f1d4678-d25e-4b07-81d3-7db7049a83c2
 # ╟─5ac62a72-03c2-4b48-952b-8b52367b2d56
-# ╟─54f5a2d1-0624-4379-9aa4-03a90f7fed8e
+# ╠═54f5a2d1-0624-4379-9aa4-03a90f7fed8e
 # ╟─ae3a4684-f2a2-46cd-885d-6e708d7e6ee5
 # ╟─9e84a02f-69b4-47b2-8336-fdab1e8a58d0
 # ╟─6577cfe5-8c62-4c50-b910-05f919f51868
@@ -4551,6 +4553,7 @@ version = "1.4.1+2"
 # ╟─01290a3d-0636-46f1-9ad6-dd4eee59c99c
 # ╟─45d4d7e3-5afc-4bb8-a8a6-b06da9ea14f7
 # ╟─995a4b27-a3d4-4bce-bd7f-fceda11c62ac
+# ╟─d6aca807-20e0-4e07-b815-c02573147818
 # ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
@@ -4562,6 +4565,7 @@ version = "1.4.1+2"
 # ╟─f3c7b4fc-4711-4984-bc57-041b0ae4ba74
 # ╟─c52f5a4b-e6af-482f-8ac7-6980c656bb78
 # ╟─2cd1500d-c91d-4a6c-9390-9f3723b637f7
+# ╟─63a9be05-ba6a-4fb1-9266-c50407d30a9d
 # ╟─00a0ff76-b5c6-4340-a146-af6bfd7cc68b
 # ╟─649c5cf6-ac7f-4393-b198-3edbee5bbf59
 # ╟─baf1a165-b56c-4562-b846-112e672fab66
