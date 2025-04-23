@@ -32,6 +32,7 @@ begin
 	using KernelDensity
 	using Colors, ColorSchemes	
 	using Flux: onehotbatch, onecold, crossentropy, throttle
+	using MLUtils: DataLoader
 	using Optimisers
 	using LinearAlgebra
 	Random.seed!(42)                     
@@ -303,20 +304,16 @@ The table below shows the result of the MLP.
 # ╔═╡ 7c2bb9a7-4d6a-410f-b477-70f5cd379caa
 md"The prediction is worse for the lzg and agn due to how unbalanced this dataset is. We can fix this by either making the dataset more balanced by removing some objects or by adding weights."
 
+# ╔═╡ 1d9fc45e-c56b-4d04-9ebd-e81fd5342713
+md"""
+### Weight Settings
+Here, we can add weights to the classes. The weight term boosts the penalty for misclassifying positive examples by computing the frequency of the target label then then inverting and exponentiating it with 1.2 (α > 1 gives nonlinear emphasis).
+"""
+
 # ╔═╡ 2846656f-5a69-44db-a49d-8b86e4f272c3
 begin
 	begin
 	    md"""
-	    ### Weight Settings
-	    
-	    Use Weighting: $(@bind use_weight CheckBox(default=false))
-	    
-	    Select Weight Amount: $(@bind weight_amt Select([1.0, 2.0, 3.0, 4.0]))
-	    """
-	end
-	begin
-	    md"""
-	    ### Weight Settings
 	    
 	    Use Weighting: $(@bind use_weight CheckBox(default=false))
 	    
@@ -378,6 +375,88 @@ md"
 Here are two heatmaps. They also alow affected by your selections above. The prediction heatmap shows the confidence around specific areas within the features. The missclassification heatmap can show specific areas where the MLP is struggling.
 "
 
+# ╔═╡ 29585f67-f317-4287-b0e8-8c1db265cd50
+md"
+## Why is the NN so awful?
+"
+
+# ╔═╡ f48ee53e-e408-4945-a6ad-d10b9d32bc0f
+md"
+### ROC Curves
+ROC curves show how a classifier performs across different decision thresholds. So, the x-axis is the False Positive Rate (FPR) — the fraction of negatives incorrectly classified as positives vs the True Positive Rate (TPR) on the y-axis — the fraction of actual positives correctly identified.
+The diagonal line represents random guessing. A model above this line is better than chance; below it is worse. The AUC (Area Under the Curve) measures the overall ability of the model to distinguish classes. 1 is perfect and 0 is worse than random.
+"
+
+# ╔═╡ 86a7e815-6141-4676-98c5-a712d2e3efa0
+function plot_all_roc(testsets::Dict)
+    plots = []
+
+    for (label, data) in testsets
+        pred_probs = vec(getfield(data, :pred_probs))  # or data.pred_probs
+        y_true = vec(data[:y_test])          # or data.y_test
+
+        thresholds = range(0.0, stop=1.0, length=200)
+        tpr, fpr, acc = Float64[], Float64[], Float64[]
+
+        for t in thresholds
+            preds = pred_probs .> t
+            tp = sum((preds .== 1) .& (y_true .== 1))
+            fp = sum((preds .== 1) .& (y_true .== 0))
+            tn = sum((preds .== 0) .& (y_true .== 0))
+            fn = sum((preds .== 0) .& (y_true .== 1))
+
+            push!(tpr, tp / (tp + fn + 1e-10))
+            push!(fpr, fp / (fp + tn + 1e-10))
+            push!(acc, (tp + tn) / (tp + tn + fp + fn))
+        end
+
+        best_idx = argmax(acc)
+        best_thresh = thresholds[best_idx]
+        sort_idx = sortperm(fpr)
+        auc = sum(diff(fpr[sort_idx]) .* ((tpr[sort_idx][1:end-1] + tpr[sort_idx][2:end]) ./ 2))
+
+        println("[$label] Best threshold = $(round(best_thresh, digits=3)), ",
+                "Accuracy = $(round(acc[best_idx]*100, digits=2))%, AUC = $(round(auc, digits=3))")
+
+        p = plot(fpr, tpr, xlabel="False Positive Rate", ylabel="True Positive Rate",
+                 title="ROC Curve — $label", legend=false)
+        plot!(p, [0, 1], [0, 1], linestyle=:dash, color=:gray)
+        push!(plots, p)
+    end
+
+    return plots
+end
+
+# ╔═╡ e22eea65-04a2-434a-b452-f5e31d9fa2eb
+md"
+#### LAE
+- **AUC = 0.391** and it is below the random line (0.5). This means the model may be confused for LAE. 
+- The curve only rises steeply after a very high false positive rate — meaning the model rarely identifies LAEs correctly without also misclassifying many non-LAEs.
+- The best threshold found is 0.296, giving an accuracy of 73.47% — this is decent on the surface but likely inflated by class imbalance (LAEs are the dominant class).
+
+The percent accuracy while guessing (in the table above) is also misleadingly high due to class imbalance — LAEs dominate the dataset, so a model could guess LAE most of the time and still appear correct. While the LAE classifier gets many predictions right, it does not rank LAE probabilities effectively, as seen in the low AUC.
+"
+
+# ╔═╡ 1c7deb03-71c3-4a62-9ff6-8afc62437cd6
+md"
+#### LZG
+- AUC = 0.038 is extremely poor and close to zero, suggesting that the model is systematically wrong in its predictions.
+- The ROC curve hugs the x-axis, rising sharply at the far right → the model rarely assigns high scores to LZGs.
+- Despite an impressive reported accuracy of 95.15% at threshold 0.704, this is likely due to class imbalance: very few LZG examples exist, so the model just says not LZG most of the time and gets away with it.
+
+In the accuracy in the table above we can guess that the model may be overconfidently wrong and not recognizing the few positive examples it needs. This classifier is not learning to distinguish LZG at all. It needs either more LZG data or better feature separation.
+"
+
+# ╔═╡ 1aa8f68d-0431-4a5f-b3b8-7ad41d914907
+md"
+#### AGN
+- AUC = 0.759 is a very strong performance!
+- The model is consistently better than random at ranking AGN likelihood.
+- The curve rises quickly, achieving high TPRs at relatively low FPRs.
+- Best threshold: 0.508, with 85.48% accuracy — solid results.
+Visually and numerically, this is the best-performing binary classifier of the three. While having lower accuracy on the table than LAE, this is more trustworthy because the model has to work harder (AGN isn't the dominant class). It could serve as a reference point for tuning or improving the LAE and LZG models.
+"
+
 # ╔═╡ d6aca807-20e0-4e07-b815-c02573147818
 md"
 # Conclusions
@@ -393,6 +472,11 @@ The current features might not be expressive enough to capture class differences
    - Undersample
    - Include the oii and star sets
    - Boosting algorithms
+"
+
+# ╔═╡ 7bdcaecb-00ff-4214-9cbd-b4abc3084ab4
+md"
+# Extra
 "
 
 # ╔═╡ a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
@@ -873,20 +957,10 @@ end
 md" ### Training and Testing Neural Network"
 
 
-# ╔═╡ 4c755b09-d3eb-4840-85b5-71892bf58da3
-md"""
-#### train_ hetdex _models (dfs; ...)
-Master function that trains a separate classifier for each source type. This calls  train_ one _ vs _rest(...) and stores the trained model, accuracy, and test set. This is where we get the dictionary of trained models.
+# ╔═╡ 71113ed5-c3a2-4cc3-89e1-d1a3dd5ab344
 """
-
-# ╔═╡ 80009b4d-957d-4921-b928-aaa08c670a81
-md"""
-#### selected_features()
 Returns a handpicked list of columns (features) from the HETDEX data used for model training.
 """
-
-# ╔═╡ 71113ed5-c3a2-4cc3-89e1-d1a3dd5ab344
-# Feature list
 function selected_features()
 	return [:continuum, :gmag, :sigma, :flux, :sn, :Av, :wave, :z_hetdex, :apcor]
 end
@@ -895,17 +969,6 @@ end
 md"""
 X-Axis: $(@bind row_vis Select(selected_features()))
 Y-Axis: $(@bind col_vis Select(selected_features()))
-"""
-
-# ╔═╡ de4cc03d-35b1-46ce-b73f-1ac690033e07
-md"""
-#### train _ one _ vs _ rest (df, label; ...)
-Trains a binary classifier to distinguish one label vs all others. It first normalizes features for stability and then does a 80% - 20% split. I used a small 3-layer neural network and it uses ReLU and a final sigmoid layer for a binary output.
-"""
-
-# ╔═╡ e3081c77-7076-4364-afb3-a5f542f75fb7
-md"""
-#### normalize_features()
 """
 
 # ╔═╡ d8a47390-083d-4eea-b62d-a72b2ca0defe
@@ -922,27 +985,21 @@ function normalize_features(X)
 	return X_norm
 end
 
-# ╔═╡ a98db5bb-a571-423d-9561-f619a2e4822f
-md"""
-#### create _batches (X, y, batch _size)
-Splits training data into shuffled mini-batches.
-"""
-
 # ╔═╡ 96f7bf4d-38c7-43f9-ac59-b166df283f0b
-# Create mini-batches
+"""
+Creates mini-batches (now using view!)
+
+"""
 function create_batches(X, y, batch_size)
-	n = size(X, 2)
-	indices = shuffle(1:n)
-	batches = []
-	for i in 1:batch_size:n
-		end_idx = min(i + batch_size - 1, n)
-		push!(batches, (X[:, indices[i:end_idx]], y[:, indices[i:end_idx]]))
-	end
-	return batches
+    loader = DataLoader((X, y); batchsize=batch_size, shuffle=true)
+    return loader
 end
 
 # ╔═╡ e7beecb7-727a-4a4b-b956-671c4e04ac4d
-function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rate, choose_weight=false, weight=1.0)
+"""
+Trains a binary classifier to distinguish one label vs all others. It first normalizes features for stability and then does a 80% - 20% split. I used a small 3-layer neural network and it defaults to ReLU and a final sigmoid layer for a binary output.
+"""
+function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rate, choose_weight=false, weight=1.0, activation = relu)
 	    Random.seed!(42)  # reproducibility
 	    
 	    y_raw = strip.(lowercase.(String.(df.source_type)))
@@ -972,7 +1029,7 @@ function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rat
 
 	    # Model
 	    input_dim = size(X_train, 1)
-	    model = Chain(Dense(input_dim, 64, relu), Dense(64, 32, relu), Dense(32, 1), sigmoid)
+	    model = Chain(Dense(input_dim, 64, activation), Dense(64, 32, activation), Dense(32, 1), sigmoid)
 
 	    function safe_bce(pred, target)
 	        pred_safe = clamp.(pred, 1e-7, 1 - 1e-7)
@@ -1029,16 +1086,24 @@ function train_one_vs_rest(df, label; features, epochs, batch_size, learning_rat
 	        prev_test_loss = test_loss
 	    end
 
-	    preds = clamp.(model(X_test), 1e-7, 1 - 1e-7) .> 0.4
-	    acc = mean(preds .== (y_test .> 0.5))
-	    println("Using weight = $(round(weight_used, digits=2)) for label = $label (weighted = $choose_weight)")
+	    pred_probs = clamp.(model(X_test), 1e-7, 1 - 1e-7)
+		preds = pred_probs .> 0.4
+		acc = mean(preds .== (y_test .> 0.5))
+		
+		println("Using weight = $(round(weight_used, digits=2)) for label = $label (weighted = $choose_weight)")
+		
+		return model, acc, pred_probs, y_test, (train_losses, test_losses), (X_test=X_test, y_test=y_test)
 
-	    return model, acc, (train_losses, test_losses), (X_test=X_test, y_test=y_test)
+
+
 	end
 
 # ╔═╡ 3ec317d6-d920-41a7-987e-e84b767571de
+"""
+Master function that trains a separate classifier for each source type. This calls  train_ one _ vs _rest(...) and stores the trained model, accuracy, and test set. This is where we get the dictionary of trained models.
+"""
 begin
-	function train_hetdex_models(dfs::Dict; epochs=20, batch_size=64, learning_rate=0.001, choose_weight=false, weight=1.0)
+	function train_hetdex_models(dfs::Dict; epochs=20, batch_size=64, learning_rate=0.001, choose_weight=false, weight=1.0, activation=relu)
 	    println("--- Processing and training for HETDEX ---")
 	    df = dfs[:filtered]
 	    labels = sort(unique(strip.(lowercase.(String.(df.source_type)))))
@@ -1050,14 +1115,16 @@ begin
 
 	    for label in labels
 	        println("\nTraining model for class: $label vs rest")
-	        model, acc, (train_losses, test_losses), test_data = train_one_vs_rest(df, label;
+	        model, acc, pred_probs, y_test, (train_losses, test_losses), test_data  = train_one_vs_rest(df, label;
 	            features=selected_features(),
 	            epochs=epochs, batch_size=batch_size,
 	            learning_rate=learning_rate,
-	            choose_weight=choose_weight, weight=weight)
+	            choose_weight=choose_weight, 
+				weight=weight, 
+				activation=activation)
 	        models[label] = model
 	        metrics[label] = acc
-	        testsets[label] = test_data
+	        testsets[label] = (X_test = test_data.X_test, y_test = test_data.y_test, pred_probs = pred_probs)
 	        train_losslog[label] = train_losses
 	        test_losslog[label] = test_losses
 	    end
@@ -1069,53 +1136,6 @@ begin
 	    return models, metrics, testsets, train_losslog, test_losslog
 	end
 end
-
-# ╔═╡ 54f5a2d1-0624-4379-9aa4-03a90f7fed8e
-# ╠═╡ show_logs = false
-models, metrics, testsets, train_losslog, test_losslog = train_hetdex_models(Dict(:filtered => filtered_df_new_per), choose_weight= use_weight , weight= weight_amt)
-
-# ╔═╡ bc8fef1b-f7b0-4a10-8bf6-f323f1e85558
-begin
-    summary_table = DataFrame(Label=String[], Total=Int[], Correct=Int[], Percent_Accuracy=Float64[])
-
-    for label in keys(models)
-        if !(label in visible_labels)
-            continue
-        end
-
-        acc = metrics[label]
-        test = testsets[label]
-        y_test = test.y_test
-        truth = y_test .> 0.5
-        total = count(truth)
-        correct = round(Int, acc * total)
-
-        push!(summary_table, (label, total, correct, round(acc * 100, digits=2)))
-    end
-
-    summary_table
-end
-
-# ╔═╡ cba62f20-fbbd-482f-b1a6-07f32ea7eb14
-# ╠═╡ show_logs = false
-begin
-    num_features = size(testsets[first(keys(testsets))][:X_test], 1)
-    all_X = Array{Float64}(undef, num_features, 0)
-    all_y_true = Float64[]
-    all_y_pred = Float64[]
-
-    for label in vis_labels
-        model = models[label]
-        X_test = testsets[label][:X_test]
-        y_test = testsets[label][:y_test]
-        preds = model(X_test)
-
-        all_X = hcat(all_X, X_test)
-        append!(all_y_true, vec(y_test))
-        append!(all_y_pred, vec(preds))
-    end
-end
-
 
 # ╔═╡ 492c00e5-6d83-4da5-bb6c-4d3af1669f37
 md" ### Visualization
@@ -1390,18 +1410,6 @@ function plot_overall_correct_vs_wrong(X, y_true, y_pred;
 end
 
 
-# ╔═╡ 186e2ae7-d659-44a6-b84c-041c313a7031
-begin
-    X, y_true, y_pred = (all_X, all_y_true, all_y_pred)
-
-    plot_overall_correct_vs_wrong(
-        X, y_true, y_pred;
-        x_feature=row_vis,
-        y_feature=col_vis,
-    )
-end
-
-
 # ╔═╡ 2c41091b-60d4-4e53-9543-fbe913442dcb
 """
 Function to plot both a prediction heatmap to show confidence.
@@ -1456,15 +1464,6 @@ function plot_prediction_heatmap_combined(
         colorbar_title=mode == :maxconf ? "Max Confidence" : "Class Index",
         title="Prediction Heatmap: $(join(selected, ", "))")
 end
-
-# ╔═╡ 45d4d7e3-5afc-4bb8-a8a6-b06da9ea14f7
-# ╠═╡ show_logs = false
-plot_prediction_heatmap_combined(
-    models, vis_labels,
-    row_vis, col_vis;
-    X=all_X,
-    mode=:maxconf
-)
 
 # ╔═╡ 91c5db06-74db-452b-841d-000e0d81948d
 """
@@ -1548,6 +1547,95 @@ function plot_misclassification_heatmap_combined(
     )
 end
 
+# ╔═╡ 87905104-7621-422c-8ca7-003b3fdbfbce
+md" #### Extra"
+
+# ╔═╡ 38ca91d8-76de-404c-a29d-66e4e27a4115
+"""
+Activation functions to try and see if the loss is any better.
+"""
+function activation()
+	return [relu, elu, gelu, tanh]
+end
+
+# ╔═╡ e846d232-6891-43bd-9957-7ea462ecbd56
+md"""
+Pick the Activation Functions: $(@bind act Select(activation()))
+"""
+
+# ╔═╡ 54f5a2d1-0624-4379-9aa4-03a90f7fed8e
+# ╠═╡ show_logs = false
+models, metrics, testsets, train_losslog, test_losslog = train_hetdex_models(
+    Dict(:filtered => filtered_df_new_per),
+    choose_weight=use_weight,
+    weight=weight_amt, activation=act
+)
+
+
+# ╔═╡ bc8fef1b-f7b0-4a10-8bf6-f323f1e85558
+begin
+    summary_table = DataFrame(Label=String[], Total=Int[], Correct=Int[], Percent_Accuracy=Float64[])
+
+    for label in keys(models)
+        if !(label in visible_labels)
+            continue
+        end
+
+        acc = metrics[label]
+        test = testsets[label]
+        y_test = test.y_test
+        truth = y_test .> 0.5
+        total = count(truth)
+        correct = round(Int, acc * total)
+
+        push!(summary_table, (label, total, correct, round(acc * 100, digits=2)))
+    end
+
+    summary_table
+end
+
+# ╔═╡ cba62f20-fbbd-482f-b1a6-07f32ea7eb14
+# ╠═╡ show_logs = false
+begin
+    num_features = size(testsets[first(keys(testsets))][:X_test], 1)
+    all_X = Array{Float64}(undef, num_features, 0)
+    all_y_true = Float64[]
+    all_y_pred = Float64[]
+
+    for label in vis_labels
+        model = models[label]
+        X_test = testsets[label][:X_test]
+        y_test = testsets[label][:y_test]
+        preds = model(X_test)
+
+        all_X = hcat(all_X, X_test)
+        append!(all_y_true, vec(y_test))
+        append!(all_y_pred, vec(preds))
+    end
+end
+
+
+# ╔═╡ 186e2ae7-d659-44a6-b84c-041c313a7031
+begin
+    X, y_true, y_pred = (all_X, all_y_true, all_y_pred)
+
+    plot_overall_correct_vs_wrong(
+        X, y_true, y_pred;
+        x_feature=row_vis,
+        y_feature=col_vis,
+    )
+end
+
+
+# ╔═╡ 45d4d7e3-5afc-4bb8-a8a6-b06da9ea14f7
+# ╠═╡ show_logs = false
+plot_prediction_heatmap_combined(
+    models, vis_labels,
+    row_vis, col_vis;
+    X=all_X,
+    mode=:maxconf
+)
+
 # ╔═╡ 995a4b27-a3d4-4bce-bd7f-fceda11c62ac
 # ╠═╡ show_logs = false
 plot_misclassification_heatmap_combined(
@@ -1555,6 +1643,61 @@ plot_misclassification_heatmap_combined(
     row_vis, col_vis;
 	resolution=150
 )
+
+
+# ╔═╡ 9336cd89-f245-43f4-a9ef-24d2892a74f3
+plots = plot_all_roc(testsets)
+
+# ╔═╡ 9d75b7a5-041d-4a04-8465-2df2b684d3d3
+plots[1]
+
+
+# ╔═╡ 3090f6b0-4326-4944-95f8-18a562e5efe6
+plots[2]
+
+# ╔═╡ 2a7e79e5-9556-4d7b-a329-0c0915b35b77
+plots[3]
+
+# ╔═╡ 94726315-b6cd-4d73-91ed-1e57e289ac28
+begin
+    summary_table2 = DataFrame(Label=String[], Total=Int[], Correct=Int[], Percent_Accuracy=Float64[])
+
+    for label in keys(models)
+        if !(label in visible_labels)
+            continue
+        end
+
+        acc = metrics[label]
+        test = testsets[label]
+        y_test = test.y_test
+        truth = y_test .> 0.5
+        total = count(truth)
+        correct = round(Int, acc * total)
+
+        push!(summary_table2, (label, total, correct, round(acc * 100, digits=2)))
+    end
+
+    summary_table2
+end
+
+# ╔═╡ 160d2b4c-8f79-4dda-b23e-f9142ab6cac5
+"""
+Loss plot for training and testing
+"""
+function plot_avg_loss(train_losslog, test_losslog)
+    labels = sort(collect(keys(train_losslog)))
+    num_epochs = length(first(values(train_losslog)))
+
+    avg_train_loss = [mean([train_losslog[label][e] for label in labels]) for e in 1:num_epochs]
+    avg_test_loss = [mean([test_losslog[label][e] for label in labels]) for e in 1:num_epochs]
+
+    plot(1:num_epochs, avg_train_loss, label="Avg Train Loss", lw=2, xlabel="Epoch", ylabel="Loss")
+    plot!(1:num_epochs, avg_test_loss, label="Avg Test Loss", lw=2, linestyle=:dash, title="Average Loss Across All Classes")
+end
+
+
+# ╔═╡ 05cafd8a-69c2-43d6-8dfc-074815b7c91a
+plot_avg_loss(train_losslog, test_losslog)
 
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
@@ -4543,6 +4686,7 @@ version = "1.4.1+2"
 # ╟─9b0bfddb-47ce-4686-81f7-22aadb3a7d92
 # ╟─bc8fef1b-f7b0-4a10-8bf6-f323f1e85558
 # ╟─7c2bb9a7-4d6a-410f-b477-70f5cd379caa
+# ╟─1d9fc45e-c56b-4d04-9ebd-e81fd5342713
 # ╟─2846656f-5a69-44db-a49d-8b86e4f272c3
 # ╟─6c110916-d3cc-4d2a-b704-e2cfd50e5f65
 # ╟─98a97d21-e2cf-4b5a-9010-19b6a6ce67f5
@@ -4553,7 +4697,21 @@ version = "1.4.1+2"
 # ╟─01290a3d-0636-46f1-9ad6-dd4eee59c99c
 # ╟─45d4d7e3-5afc-4bb8-a8a6-b06da9ea14f7
 # ╟─995a4b27-a3d4-4bce-bd7f-fceda11c62ac
+# ╟─29585f67-f317-4287-b0e8-8c1db265cd50
+# ╟─f48ee53e-e408-4945-a6ad-d10b9d32bc0f
+# ╟─86a7e815-6141-4676-98c5-a712d2e3efa0
+# ╟─9336cd89-f245-43f4-a9ef-24d2892a74f3
+# ╟─e22eea65-04a2-434a-b452-f5e31d9fa2eb
+# ╟─9d75b7a5-041d-4a04-8465-2df2b684d3d3
+# ╟─1c7deb03-71c3-4a62-9ff6-8afc62437cd6
+# ╟─3090f6b0-4326-4944-95f8-18a562e5efe6
+# ╟─1aa8f68d-0431-4a5f-b3b8-7ad41d914907
+# ╟─2a7e79e5-9556-4d7b-a329-0c0915b35b77
 # ╟─d6aca807-20e0-4e07-b815-c02573147818
+# ╟─7bdcaecb-00ff-4214-9cbd-b4abc3084ab4
+# ╟─e846d232-6891-43bd-9957-7ea462ecbd56
+# ╟─94726315-b6cd-4d73-91ed-1e57e289ac28
+# ╟─05cafd8a-69c2-43d6-8dfc-074815b7c91a
 # ╟─a26602d5-eb47-4655-8cf5-8fe15a2c6c1b
 # ╠═2ec1a511-54bd-407b-8c58-0cfe2a7498c4
 # ╟─5a2c5198-a340-4b78-8fc2-3a07a16546ec
@@ -4575,15 +4733,10 @@ version = "1.4.1+2"
 # ╟─64eaa0b1-362a-431b-91a8-c037124c9e9b
 # ╟─39ce14f7-c495-4d75-be11-93ccef40c773
 # ╟─d45b8d13-2bc9-4f1d-8bf2-85e37350cec6
-# ╟─4c755b09-d3eb-4840-85b5-71892bf58da3
 # ╟─3ec317d6-d920-41a7-987e-e84b767571de
-# ╟─80009b4d-957d-4921-b928-aaa08c670a81
 # ╟─71113ed5-c3a2-4cc3-89e1-d1a3dd5ab344
-# ╟─de4cc03d-35b1-46ce-b73f-1ac690033e07
 # ╟─e7beecb7-727a-4a4b-b956-671c4e04ac4d
-# ╟─e3081c77-7076-4364-afb3-a5f542f75fb7
 # ╟─d8a47390-083d-4eea-b62d-a72b2ca0defe
-# ╟─a98db5bb-a571-423d-9561-f619a2e4822f
 # ╟─96f7bf4d-38c7-43f9-ac59-b166df283f0b
 # ╟─492c00e5-6d83-4da5-bb6c-4d3af1669f37
 # ╟─1bc9e7d0-8015-4bb5-8af0-3638d757dc7c
@@ -4598,5 +4751,8 @@ version = "1.4.1+2"
 # ╟─5884859e-2289-4cd3-8308-6b6093037014
 # ╟─2c41091b-60d4-4e53-9543-fbe913442dcb
 # ╟─91c5db06-74db-452b-841d-000e0d81948d
+# ╟─87905104-7621-422c-8ca7-003b3fdbfbce
+# ╟─38ca91d8-76de-404c-a29d-66e4e27a4115
+# ╟─160d2b4c-8f79-4dda-b23e-f9142ab6cac5
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
