@@ -134,7 +134,7 @@ md"""
 
 ## Basic Filtering
 
-Below, continuum values below zero are removed to create our baseline dataframe. The first option for filtering is introduced in which any data farther than 3σ is removed. This is a very common technique in astronomy. 
+Below, values below zero are removed to create our baseline dataframe from parameters whose sub-zero values must only be a result of measurement error.
 """
 
 # ╔═╡ 318e021b-09d0-4c61-bb70-63f3267d89e3
@@ -149,6 +149,9 @@ A low MAD threshold suggests that the data might be very flat and absolute devia
 
 A higher MAD threshold implies the presence of more significant outliers. In this case, any data that is within 10x the threshold is kept to remove only the most extreme of outliers, and all other points are discarded. This method typically results in keeping more data.
 """
+
+# ╔═╡ 438bfabf-9d60-42b7-a675-5f46c5155826
+md" Here, see the difference in the data after filtering -"
 
 # ╔═╡ cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 md"""
@@ -234,37 +237,6 @@ See the true vs misclassified objects below in two formats. Adjust the x and y s
 md"""
 X-Axis: $(@bind row_type2 Select(types[:, 1]))
 Y-Axis: $(@bind col_type2 Select(types[:, 1]))
-"""
-
-# ╔═╡ bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
-md"""
-Slide to adjust x domain: 
-    Min: $(@bind x_min1 Slider(0:10:2000; default=0, show_value=true)) 
-    Max: $(@bind x_max1 Slider(0:10:2000; default=1000, show_value=true))
-"""
-
-# ╔═╡ 05de7c5b-cd38-4cf7-8530-34c22d63ca79
-md"""
-Slide to adjust y range: 
-    Min: $(@bind y_min1 Slider(0.1:0.1:30; default=0, show_value=true))
-    Max: $(@bind y_max1 Slider(0.1:0.1:30; default=28, show_value=true))
-"""
-
-# ╔═╡ 3d693c6c-3cb6-4172-8356-ba8716d66efc
-
-
-# ╔═╡ d8669fd4-ec53-456f-9be9-f3198a914185
-md"""
-Slide to adjust x domain: 
-    Min: $(@bind x_min2 Slider(0:10:2000; default=0, show_value=true)) 
-    Max: $(@bind x_max2 Slider(0:10:2000; default=1000, show_value=true))
-"""
-
-# ╔═╡ 9f1d4678-d25e-4b07-81d3-7db7049a83c2
-md"""
-Slide to adjust y range: 
-    Min: $(@bind y_min2 Slider(0:0.1:30; default=0, show_value=true)) 
-    Max: $(@bind y_max2 Slider(0:0.1:30; default=5, show_value=true))
 """
 
 # ╔═╡ 5ac62a72-03c2-4b48-952b-8b52367b2d56
@@ -778,6 +750,29 @@ begin
     
     plt2
 end
+
+# ╔═╡ 01e7c850-3c0e-4275-a5ee-e60f5a5c57ce
+begin
+    xm = round(maximum(filtered_df_new_per[!, row_type2]),sigdigits=2)
+    ym = round(maximum(filtered_df_new_per[!, col_type2]),sigdigits=2)
+    xstep = round(xm/1000,sigdigits=2)
+    ystep = round(ym/1000,sigdigits=2)
+    print("")
+end
+
+# ╔═╡ bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
+md"""
+Slide to adjust x domain:
+     Min: $(@bind x_min1 Slider(0:xstep:xm; default=0, show_value=true))
+     Max: $(@bind x_max1 Slider(0:xstep:xm; default=xm, show_value=true))
+"""
+
+# ╔═╡ 05de7c5b-cd38-4cf7-8530-34c22d63ca79
+md"""
+Slide to adjust y range:
+     Min: $(@bind y_min1 Slider(0:ystep:ym; default=0, show_value=true))
+     Max: $(@bind y_max1 Slider(0:ystep:ym; default=ym, show_value=true))
+"""
 
 # ╔═╡ 00a0ff76-b5c6-4340-a146-af6bfd7cc68b
 md" ### Running the Binary LogReg Model"
@@ -1362,7 +1357,7 @@ end
 
 # ╔═╡ fa59defd-6da1-47ee-974c-68cee481e032
 if run_code
-	plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min2,x_max2,y_min2,y_max2], 200)
+	plot_heat(filtered_df_new_per, predictions, row_type2, col_type2, [x_min1,x_max1,y_min1,y_max1], 200)
 end
 
 # ╔═╡ 906eef4d-a8a5-481f-8f2b-f39a6612e73a
@@ -4648,7 +4643,7 @@ version = "1.4.1+2"
 # ╟─08c58fe0-05cb-4261-b439-125e23bef928
 # ╟─b11d3b4a-5d1d-462b-b4e9-cf0f1a21f3fd
 # ╟─92be734b-4a14-4f51-96d6-bd70664db385
-# ╠═4ffdd47c-2f29-4807-a0d6-816f547e9f36
+# ╟─4ffdd47c-2f29-4807-a0d6-816f547e9f36
 # ╟─dfbfbcf6-6f70-4a6c-b2b0-e44b7a22eb33
 # ╟─156347d1-4d07-4745-90c8-1287d2179a79
 # ╟─3f822b20-8aec-42c2-bec9-2676ad39f5d2
@@ -4657,6 +4652,7 @@ version = "1.4.1+2"
 # ╠═7e0f7f15-d002-4c70-ac38-25a9c34c6d6d
 # ╟─318e021b-09d0-4c61-bb70-63f3267d89e3
 # ╠═79c8e397-c121-4553-9e45-c3005a737fdf
+# ╟─438bfabf-9d60-42b7-a675-5f46c5155826
 # ╟─1bb82599-45c3-4cf1-a80f-054933cc2515
 # ╟─cb6431f9-b684-4206-bdcf-c9ef5b36fbcb
 # ╟─06078401-9a5a-41bf-a971-060466db94fe
@@ -4671,12 +4667,10 @@ version = "1.4.1+2"
 # ╟─4b3932b9-dfdc-4e85-9760-d863cfd8abce
 # ╟─d7cb9b41-8b21-4e3f-8fff-1a12c47d2416
 # ╟─72bcd4fb-b1b3-446e-be0c-10b17218ab66
+# ╟─fa59defd-6da1-47ee-974c-68cee481e032
+# ╟─01e7c850-3c0e-4275-a5ee-e60f5a5c57ce
 # ╟─bb07df2a-96f6-4ce7-89b0-4274c6ad8ce5
 # ╟─05de7c5b-cd38-4cf7-8530-34c22d63ca79
-# ╟─3d693c6c-3cb6-4172-8356-ba8716d66efc
-# ╟─fa59defd-6da1-47ee-974c-68cee481e032
-# ╟─d8669fd4-ec53-456f-9be9-f3198a914185
-# ╟─9f1d4678-d25e-4b07-81d3-7db7049a83c2
 # ╟─5ac62a72-03c2-4b48-952b-8b52367b2d56
 # ╠═54f5a2d1-0624-4379-9aa4-03a90f7fed8e
 # ╟─ae3a4684-f2a2-46cd-885d-6e708d7e6ee5
